@@ -6,7 +6,7 @@ This repository hosts the research materials, algorithms, and documentation deve
 
 ## Context and Fellowship
 
-- **Program**: [Waterloo Engineering Rising Stars Program](https://uwaterloo.ca/engineering/rising-stars-program)
+- **Program**: [Waterloo Engineering Rising Stars Program](https://uwaterloo.ca/engineering/waterloo-engineering-rising-stars-fellowship-program)
 - **Timeline**: May 10, 2026 – August 22, 2026
 - **Institution**: University of Waterloo, Faculty of Engineering
 - **Research Group**: Conducted within the research group of Dr. Stephen L. Smith.
