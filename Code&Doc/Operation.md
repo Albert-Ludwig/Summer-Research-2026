@@ -4,6 +4,14 @@
 
 ### structure:
 
+```
+Terminal 0: for testing.
+Terminal 1: for Gazebo.
+Terminal 2: for Nav2.
+Terminal 3: for SLAM.
+Terminal 4: for RViz.
+```
+
 #### Terminal 0: only run the test command.
 
 ```Bash
