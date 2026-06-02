@@ -384,3 +384,111 @@ This identifies the generated platform launch file as part of the velocity-comma
 | Robot serial number                  | `j100-0001`                                                      | `/home/ubuntu/clearpath/robot.yaml`                                 |
 | Gazebo LiDAR scan topic              | `/cpr_j100_0001/sensors/lidar2d_0/scan`                          | `/home/ubuntu/clearpath/sensors/config/lidar2d_0.yaml`              |
 | ROS–Gazebo command bridge references | `cpr_j100_0001/cmd_vel` and `/model/cpr_j100_0001/robot/cmd_vel` | `/home/ubuntu/clearpath/platform/launch/platform-service.launch.py` |
+
+## 8. Source Trace Completion Addendum
+
+### 8.1 Gazebo World Loading Logic
+
+Clearpath Gazebo world selection is defined by:
+
+```text
+/opt/ros/jazzy/share/clearpath_gz/launch/simulation.launch.py
+/opt/ros/jazzy/share/clearpath_gz/launch/gz_sim.launch.py
+```
+
+`simulation.launch.py` forwards the `world` launch argument, and `gz_sim.launch.py` resolves it as:
+
+```text
+<world>.sdf
+```
+
+The validated launch argument:
+
+```text
+world:=office
+```
+
+loads:
+
+```text
+/opt/ros/jazzy/share/clearpath_gz/worlds/office.sdf
+```
+
+### 8.2 Final Velocity Routing to Gazebo
+
+The generated `twist_mux` configuration file:
+
+```text
+/home/ubuntu/clearpath/platform/config/twist_mux.yaml
+```
+
+defines the external navigation command input as:
+
+```yaml
+topics.external.topic: "cmd_vel"
+```
+
+The installed Clearpath control launch file:
+
+```text
+/opt/ros/jazzy/share/clearpath_control/launch/teleop_base.launch.py
+```
+
+remaps the `twist_mux` output as:
+
+```python
+('cmd_vel_out', 'platform/cmd_vel')
+```
+
+The generated platform bridge launch file:
+
+```text
+/home/ubuntu/clearpath/platform/launch/platform-service.launch.py
+```
+
+creates the `ros_gz_bridge` velocity bridge and remaps the Gazebo robot command interface to the ROS platform command topic:
+
+```python
+('/model/cpr_j100_0001/robot/cmd_vel', 'platform/cmd_vel')
+```
+
+The traced final actuation path is:
+
+```text
+/cpr_j100_0001/cmd_vel
+  -> twist_mux
+  -> /cpr_j100_0001/platform/cmd_vel
+  -> ros_gz_bridge / cmd_vel_bridge
+  -> /model/cpr_j100_0001/robot/cmd_vel
+  -> simulated Jackal motion in Gazebo
+```
+
+### 8.3 Confirmed Source References
+
+| Interface / Function                                  | Confirmed Source Location                                                                |
+| ----------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| Gazebo world loading: `world:=office` -> `office.sdf` | `clearpath_gz/launch/simulation.launch.py`, `clearpath_gz/launch/gz_sim.launch.py`       |
+| SLAM frame configuration: `map`, `odom`, `base_link`  | `clearpath_nav2_demos/config/j100/slam.yaml`                                             |
+| Effective namespaced LiDAR topic selection            | `clearpath_nav2_demos/launch/slam.launch.py`, `nav2.launch.py`, `localization.launch.py` |
+| Robot namespace `/cpr_j100_0001`                      | `/home/ubuntu/clearpath/robot.yaml`                                                      |
+| Generated Gazebo LiDAR topic                          | `/home/ubuntu/clearpath/sensors/config/lidar2d_0.yaml`                                   |
+| Velocity smoothing and collision-monitor routing      | `clearpath_nav2_demos/config/j100/nav2.yaml`                                             |
+| `cmd_vel` input to `twist_mux`                        | `/home/ubuntu/clearpath/platform/config/twist_mux.yaml`                                  |
+| `twist_mux` output to `platform/cmd_vel`              | `clearpath_control/launch/teleop_base.launch.py`                                         |
+| ROS-Gazebo platform velocity bridge                   | `/home/ubuntu/clearpath/platform/launch/platform-service.launch.py`                      |
+
+The fully traced velocity path is:
+
+```text
+controller_server / behavior_server
+  -> /cpr_j100_0001/cmd_vel_nav
+  -> velocity_smoother
+  -> /cpr_j100_0001/cmd_vel_smoothed
+  -> collision_monitor
+  -> /cpr_j100_0001/cmd_vel
+  -> twist_mux
+  -> /cpr_j100_0001/platform/cmd_vel
+  -> ros_gz_bridge / cmd_vel_bridge
+  -> /model/cpr_j100_0001/robot/cmd_vel
+  -> simulated Jackal motion in Gazebo
+```
