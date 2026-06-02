@@ -1,4 +1,4 @@
-# Gazebo-Nav2 Baseline and `office` World Validation Record
+# Gazebo-Nav2 Baseline & interface record
 
 ## 1. Tested System
 
@@ -294,180 +294,93 @@ This configuration is consistent with the runtime velocity-processing section pr
   -> collision_monitor
 ```
 
-## 7. Source and Configuration Trace
+## 7. Source trace addendum velocity namespace
 
-### 7.1 Gazebo World Assets
+### 7.1 Collision-Monitor Velocity Output
 
-The Clearpath Gazebo world assets are located in:
-
-```text
-/opt/ros/jazzy/share/clearpath_gz/worlds/
-```
-
-Available world files identified in the installed package are:
-
-```text
-construction.sdf
-office.sdf
-orchard.sdf
-pipeline.sdf
-solar_farm.sdf
-warehouse.sdf
-```
-
-The alternative environment validated in the simulation test is:
-
-```text
-/opt/ros/jazzy/share/clearpath_gz/worlds/office.sdf
-```
-
-Relevant Gazebo launch files are located in:
-
-```text
-/opt/ros/jazzy/share/clearpath_gz/launch/
-```
-
-```text
-gz_sim.launch.py
-robot_spawn.launch.py
-simulation.launch.py
-```
-
-### 7.2 Jackal J100 Navigation Configuration
-
-The Clearpath navigation configuration for the Jackal J100 is located in:
-
-```text
-/opt/ros/jazzy/share/clearpath_nav2_demos/config/j100/
-```
-
-```text
-slam.yaml
-nav2.yaml
-localization.yaml
-```
-
-The corresponding launch files are located in:
-
-```text
-/opt/ros/jazzy/share/clearpath_nav2_demos/launch/
-```
-
-```text
-slam.launch.py
-nav2.launch.py
-localization.launch.py
-```
-
-### 7.3 SLAM Frame Configuration
-
-The J100 SLAM parameter file is:
-
-```text
-/opt/ros/jazzy/share/clearpath_nav2_demos/config/j100/slam.yaml
-```
-
-The identified frame parameters are:
-
-```yaml
-odom_frame: odom
-map_frame: map
-base_frame: base_link
-```
-
-These parameters are consistent with the runtime transform previously observed:
-
-```text
-map → odom
-```
-
-### 7.4 Effective LiDAR Topic Selection
-
-The base J100 SLAM parameter file contains:
-
-```yaml
-scan_topic: /scan
-```
-
-However, the following launch files contain default scan-topic resolution logic:
-
-```text
-/opt/ros/jazzy/share/clearpath_nav2_demos/launch/slam.launch.py
-/opt/ros/jazzy/share/clearpath_nav2_demos/launch/nav2.launch.py
-/opt/ros/jazzy/share/clearpath_nav2_demos/launch/localization.launch.py
-```
-
-The launch logic resolves an unspecified scan input as:
-
-```python
-eval_scan_topic = f'/{namespace}/sensors/lidar2d_0/scan'
-```
-
-For the current namespace:
-
-```text
-/cpr_j100_0001
-```
-
-the effective LiDAR topic is:
-
-```text
-/cpr_j100_0001/sensors/lidar2d_0/scan
-```
-
-This matches the topic used during successful SLAM and Nav2 runtime operation.
-
-### 7.5 Nav2 Velocity Processing Configuration
-
-The J100 Nav2 parameter file is:
+The J100 Nav2 parameter file:
 
 ```text
 /opt/ros/jazzy/share/clearpath_nav2_demos/config/j100/nav2.yaml
 ```
 
-The file contains configuration entries for:
-
-```text
-velocity_smoother
-collision_monitor
-```
-
-The identified collision-monitor parameters include:
+defines the collision-monitor velocity topics as:
 
 ```yaml
-base_frame_id: "base_link"
-odom_frame_id: "odom"
 cmd_vel_in_topic: "cmd_vel_smoothed"
+cmd_vel_out_topic: "cmd_vel"
 ```
 
-This is consistent with the runtime-observed velocity-processing segment:
+This identifies the configuration source for the verified runtime segment:
 
 ```text
-/cpr_j100_0001/cmd_vel_nav
-  → velocity_smoother
-  → /cpr_j100_0001/cmd_vel_smoothed
+/cpr_j100_0001/cmd_vel_smoothed
   → collision_monitor
+  → /cpr_j100_0001/cmd_vel
 ```
 
----
+### 7.2 Robot Namespace Source
 
-### 7.6. Source Review Conclusions
-
-| Confirmed Item                              | Result                                                               | Source Location                                                                   |
-| ------------------------------------------- | -------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
-| Gazebo world assets                         | Includes `office.sdf` and `warehouse.sdf` among the installed worlds | `/opt/ros/jazzy/share/clearpath_gz/worlds/`                                       |
-| Tested alternative world asset              | `office.sdf`                                                         | `/opt/ros/jazzy/share/clearpath_gz/worlds/office.sdf`                             |
-| J100 navigation configuration               | `slam.yaml`, `nav2.yaml`, `localization.yaml`                        | `/opt/ros/jazzy/share/clearpath_nav2_demos/config/j100/`                          |
-| SLAM reference frames                       | `map`, `odom`, `base_link`                                           | `config/j100/slam.yaml`                                                           |
-| Effective scan topic selection              | `/<namespace>/sensors/lidar2d_0/scan`                                | `launch/slam.launch.py`, `launch/nav2.launch.py`, `launch/localization.launch.py` |
-| Effective LiDAR topic in current stack      | `/cpr_j100_0001/sensors/lidar2d_0/scan`                              | Resolved using namespace `/cpr_j100_0001`                                         |
-| Velocity smoothing and collision monitoring | `velocity_smoother` and `collision_monitor` are configured for J100  | `config/j100/nav2.yaml`                                                           |
-| Collision-monitor velocity input            | `cmd_vel_in_topic: "cmd_vel_smoothed"`                               | `config/j100/nav2.yaml`                                                           |
-
-The source inspection confirms that the working LiDAR interface:
+The current robot namespace is defined in:
 
 ```text
-/cpr_j100_0001/sensors/lidar2d_0/scan
+/home/ubuntu/clearpath/robot.yaml
 ```
 
-is consistent with Clearpath's launch-file logic. Although `slam.yaml` contains `scan_topic: /scan`, the launch files resolve the effective sensor input to the namespaced LiDAR topic when no explicit topic override is supplied. Therefore, the validated stack does not require a separate root-level `/scan` relay.
+```yaml
+serial_number: j100-0001
+namespace: cpr_j100_0001
+```
+
+The generated platform and sensor configuration files consistently use this namespace, including:
+
+```text
+/home/ubuntu/clearpath/platform/config/twist_mux.yaml
+/home/ubuntu/clearpath/platform/launch/platform-service.launch.py
+/home/ubuntu/clearpath/sensors/config/lidar2d_0.yaml
+/home/ubuntu/clearpath/sensors/launch/lidar2d_0.launch.py
+```
+
+### 7.3 Generated LiDAR Topic Configuration
+
+The generated LiDAR configuration file:
+
+```text
+/home/ubuntu/clearpath/sensors/config/lidar2d_0.yaml
+```
+
+defines the Gazebo scan topic as:
+
+```yaml
+gz_topic_name: /cpr_j100_0001/sensors/lidar2d_0/scan
+```
+
+This is consistent with the namespaced LiDAR topic used by the validated SLAM and Nav2 runtime stack.
+
+### 7.4 ROS–Gazebo Velocity Bridge Location
+
+The generated platform launch file:
+
+```text
+/home/ubuntu/clearpath/platform/launch/platform-service.launch.py
+```
+
+contains velocity bridge references between the ROS 2 command topic and the Gazebo robot model command topic:
+
+```text
+cpr_j100_0001/cmd_vel
+/model/cpr_j100_0001/robot/cmd_vel
+```
+
+This identifies the generated platform launch file as part of the velocity-command interface between ROS 2 and the simulated Jackal model.
+
+### 7.5. Conclusion table
+
+| Confirmed Item                       | Result                                                           | Source Location                                                     |
+| ------------------------------------ | ---------------------------------------------------------------- | ------------------------------------------------------------------- |
+| Collision-monitor input topic        | `cmd_vel_smoothed`                                               | `/opt/ros/jazzy/share/clearpath_nav2_demos/config/j100/nav2.yaml`   |
+| Collision-monitor output topic       | `cmd_vel`                                                        | `/opt/ros/jazzy/share/clearpath_nav2_demos/config/j100/nav2.yaml`   |
+| Robot namespace                      | `cpr_j100_0001`                                                  | `/home/ubuntu/clearpath/robot.yaml`                                 |
+| Robot serial number                  | `j100-0001`                                                      | `/home/ubuntu/clearpath/robot.yaml`                                 |
+| Gazebo LiDAR scan topic              | `/cpr_j100_0001/sensors/lidar2d_0/scan`                          | `/home/ubuntu/clearpath/sensors/config/lidar2d_0.yaml`              |
+| ROS–Gazebo command bridge references | `cpr_j100_0001/cmd_vel` and `/model/cpr_j100_0001/robot/cmd_vel` | `/home/ubuntu/clearpath/platform/launch/platform-service.launch.py` |
