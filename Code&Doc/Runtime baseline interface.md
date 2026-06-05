@@ -10,6 +10,7 @@
 | Mapping                  | `slam_toolbox`                     |
 | Navigation               | Nav2                               |
 | Robot Namespace          | `/cpr_j100_0001`                   |
+| Gazebo Model Name        | `cpr_j100_0001`                    |
 | Alternative World Tested | `office`                           |
 
 ## 2. Verified Runtime Interfaces
@@ -24,6 +25,7 @@
 | Smoothed velocity            | `/cpr_j100_0001/cmd_vel_smoothed`       | `velocity_smoother`                                | Smoothed navigation velocity                             |
 | Safety-filtered command path | `/cpr_j100_0001/cmd_vel`                | `collision_monitor` output; `twist_mux` subscribes | Velocity path before platform actuation                  |
 | Final platform velocity      | `/cpr_j100_0001/platform/cmd_vel`       | `twist_mux`                                        | Command executed by simulated Jackal                     |
+| Gazebo robot command         | `/model/cpr_j100_0001/robot/cmd_vel`    | `ros_gz_bridge` / `cmd_vel_bridge`                 | Gazebo-side command interface for model `cpr_j100_0001`  |
 
 HuNavSim-relevant runtime interfaces:
 
