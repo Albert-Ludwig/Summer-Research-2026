@@ -6,13 +6,13 @@
 
 ## 0. Terminal roles
 
-| Terminal | Purpose |
-|---|---|
+| Terminal   | Purpose                                   |
+| ---------- | ----------------------------------------- |
 | Terminal 1 | Background full HuNav + Gazebo simulation |
-| Terminal 2 | Background Jackal spawn / controllers |
-| Terminal 3 | Health checks / tests |
-| Terminal 4 | Cleanup / recovery terminal |
-| Terminal 5 | `/clock` bridge |
+| Terminal 2 | Background Jackal spawn / controllers     |
+| Terminal 3 | Health checks / tests                     |
+| Terminal 4 | Cleanup / recovery terminal               |
+| Terminal 5 | `/clock` bridge                           |
 
 ---
 
@@ -92,16 +92,21 @@ Keep this terminal running.
 ```bash
 source /opt/ros/jazzy/setup.bash
 
-if gz topic -l | grep -qx "/clock"; then
-  ros2 run ros_gz_bridge parameter_bridge \
-    '/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock'
-elif gz topic -l | grep -qx "/world/office/clock"; then
-  ros2 run ros_gz_bridge parameter_bridge \
-    '/world/office/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock' \
-    --ros-args -r /world/office/clock:=/clock
-else
+echo "===== FIND GAZEBO CLOCK TOPIC ====="
+CLOCK_TOPIC=$(gz topic -l | grep -E '^(/clock|/world/.*/clock)$' | head -n 1)
+
+echo "CLOCK_TOPIC=$CLOCK_TOPIC"
+
+if [ -z "$CLOCK_TOPIC" ]; then
   echo "FAIL: No Gazebo clock topic found."
   gz topic -l | grep clock || true
+elif [ "$CLOCK_TOPIC" = "/clock" ]; then
+  ros2 run ros_gz_bridge parameter_bridge \
+    '/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock'
+else
+  ros2 run ros_gz_bridge parameter_bridge \
+    "${CLOCK_TOPIC}@rosgraph_msgs/msg/Clock[gz.msgs.Clock" \
+    --ros-args -r "${CLOCK_TOPIC}:=/clock"
 fi
 ```
 
