@@ -92,21 +92,16 @@ Keep this terminal running.
 ```bash
 source /opt/ros/jazzy/setup.bash
 
-echo "===== FIND GAZEBO CLOCK TOPIC ====="
-CLOCK_TOPIC=$(gz topic -l | grep -E '^(/clock|/world/.*/clock)$' | head -n 1)
-
-echo "CLOCK_TOPIC=$CLOCK_TOPIC"
-
-if [ -z "$CLOCK_TOPIC" ]; then
-  echo "FAIL: No Gazebo clock topic found."
-  gz topic -l | grep clock || true
-elif [ "$CLOCK_TOPIC" = "/clock" ]; then
+if gz topic -l | grep -qx "/clock"; then
   ros2 run ros_gz_bridge parameter_bridge \
     '/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock'
-else
+elif gz topic -l | grep -qx "/world/office/clock"; then
   ros2 run ros_gz_bridge parameter_bridge \
-    "${CLOCK_TOPIC}@rosgraph_msgs/msg/Clock[gz.msgs.Clock" \
-    --ros-args -r "${CLOCK_TOPIC}:=/clock"
+    '/world/office/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock' \
+    --ros-args -r /world/office/clock:=/clock
+else
+  echo "FAIL: No Gazebo clock topic found."
+  gz topic -l | grep clock || true
 fi
 ```
 
@@ -273,55 +268,382 @@ python3 /tmp/demo_hunav_motion.py
 
 ---
 
-## 7. Shutdown order
+## 7. RViz + SLAM + Nav2 add-on
 
-Stop the terminals using `Ctrl+C` in this order:
+Use this only after Terminal 1, Terminal 5, and Terminal 2 are already running.
 
-```text
-Terminal 2: Jackal
-Terminal 5: /clock bridge
-Terminal 1: HuNav + Gazebo
-```
-
-Then use Terminal 4 for cleanup if needed:
+### Terminal 7: TF repair daemon
 
 ```bash
 source /opt/ros/jazzy/setup.bash
+cd ~/hunav_jazzy_ws
+source install/setup.bash
 
-pkill -INT -f '[s]imulation_fortress.launch.py' 2>/dev/null || true
-pkill -INT -f '[r]obot_spawn.launch.py' 2>/dev/null || true
-pkill -INT -f '[p]arameter_bridge' 2>/dev/null || true
-pkill -INT -f '[g]z sim' 2>/dev/null || true
-pkill -INT -f '[c]pr_j100_0001' 2>/dev/null || true
-pkill -INT -f '[h]unav_' 2>/dev/null || true
+export ROS_DOMAIN_ID=0
+export ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
+unset ROS_LOCALHOST_ONLY
+unset RMW_IMPLEMENTATION
+unset ROS_DISCOVERY_SERVER
+unset FASTRTPS_DEFAULT_PROFILES_FILE
+unset CYCLONEDDS_URI
 
-sleep 3
+python3 - <<'PY'
+import rclpy
+from rclpy.qos import QoSProfile, DurabilityPolicy, ReliabilityPolicy
+from nav_msgs.msg import Odometry
+from tf2_msgs.msg import TFMessage
+from geometry_msgs.msg import TransformStamped
 
-pkill -KILL -f '[s]imulation_fortress.launch.py' 2>/dev/null || true
-pkill -KILL -f '[r]obot_spawn.launch.py' 2>/dev/null || true
-pkill -KILL -f '[p]arameter_bridge' 2>/dev/null || true
-pkill -KILL -f '[g]z sim' 2>/dev/null || true
-pkill -KILL -f '[c]pr_j100_0001' 2>/dev/null || true
-pkill -KILL -f '[h]unav_' 2>/dev/null || true
+ROBOT_NS = "/cpr_j100_0001"
+ODOM_TOPIC = f"{ROBOT_NS}/platform/odom"
 
-ros2 daemon stop
-sleep 2
-ros2 daemon start
+LIDAR_X = 0.0
+LIDAR_Y = 0.0
+LIDAR_Z = 0.25
+
+rclpy.init()
+node = rclpy.create_node("jackal_tf_repair_v2")
+
+tf_pub_global = node.create_publisher(TFMessage, "/tf", 100)
+tf_pub_ns = node.create_publisher(TFMessage, f"{ROBOT_NS}/tf", 100)
+
+static_qos = QoSProfile(depth=10)
+static_qos.durability = DurabilityPolicy.TRANSIENT_LOCAL
+static_qos.reliability = ReliabilityPolicy.RELIABLE
+
+tf_static_pub_global = node.create_publisher(TFMessage, "/tf_static", static_qos)
+tf_static_pub_ns = node.create_publisher(TFMessage, f"{ROBOT_NS}/tf_static", static_qos)
+
+def make_static(parent, child, x=0.0, y=0.0, z=0.0):
+    t = TransformStamped()
+    t.header.stamp = node.get_clock().now().to_msg()
+    t.header.frame_id = parent
+    t.child_frame_id = child
+    t.transform.translation.x = x
+    t.transform.translation.y = y
+    t.transform.translation.z = z
+    t.transform.rotation.w = 1.0
+    return t
+
+def publish_static():
+    msg = TFMessage()
+    msg.transforms.append(make_static("base_link", "chassis_link"))
+    msg.transforms.append(make_static("chassis_link", "lidar2d_0_laser", LIDAR_X, LIDAR_Y, LIDAR_Z))
+    tf_static_pub_global.publish(msg)
+    tf_static_pub_ns.publish(msg)
+
+def odom_cb(msg: Odometry):
+    t = TransformStamped()
+    t.header.stamp = msg.header.stamp
+    t.header.frame_id = msg.header.frame_id if msg.header.frame_id else "odom"
+    t.child_frame_id = msg.child_frame_id if msg.child_frame_id else "base_link"
+    t.transform.translation.x = msg.pose.pose.position.x
+    t.transform.translation.y = msg.pose.pose.position.y
+    t.transform.translation.z = msg.pose.pose.position.z
+    t.transform.rotation = msg.pose.pose.orientation
+
+    out = TFMessage()
+    out.transforms.append(t)
+    tf_pub_global.publish(out)
+    tf_pub_ns.publish(out)
+
+node.create_subscription(Odometry, ODOM_TOPIC, odom_cb, 50)
+node.create_timer(1.0, publish_static)
+publish_static()
+
+print("jackal_tf_repair_v2 running.")
+print("Publishing dynamic: odom -> base_link")
+print("Publishing static: base_link -> chassis_link -> lidar2d_0_laser")
+print("Keep this terminal running.")
+
+try:
+    rclpy.spin(node)
+except KeyboardInterrupt:
+    pass
+
+node.destroy_node()
+rclpy.shutdown()
+PY
 ```
 
----
+### Terminal 4: Start SLAM
 
-## 8. Last verified successful result
+```bash
+source /opt/ros/jazzy/setup.bash
+cd ~/hunav_jazzy_ws
+source install/setup.bash
 
-The most recent full validation showed:
+export ROS_DOMAIN_ID=0
+export ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
+unset ROS_LOCALHOST_ONLY
+unset RMW_IMPLEMENTATION
+unset ROS_DISCOVERY_SERVER
+unset FASTRTPS_DEFAULT_PROFILES_FILE
+unset CYCLONEDDS_URI
+
+rm -f slam_toolbox_debug.log
+
+ros2 launch clearpath_nav2_demos slam.launch.py \
+  use_sim_time:=true \
+  setup_path:=$HOME/clearpath \
+  2>&1 | tee slam_toolbox_debug.log
+```
+
+Keep this terminal running.
+
+### Terminal 3: Start Nav2
+
+```bash
+source /opt/ros/jazzy/setup.bash
+cd ~/hunav_jazzy_ws
+source install/setup.bash
+
+export ROS_DOMAIN_ID=0
+export ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
+unset ROS_LOCALHOST_ONLY
+unset RMW_IMPLEMENTATION
+unset ROS_DISCOVERY_SERVER
+unset FASTRTPS_DEFAULT_PROFILES_FILE
+unset CYCLONEDDS_URI
+
+rm -f nav2_debug.log
+
+stdbuf -oL -eL ros2 launch clearpath_nav2_demos nav2.launch.py \
+  use_sim_time:=true \
+  setup_path:=$HOME/clearpath \
+  2>&1 | tee nav2_debug.log
+```
+
+Wait until this appears:
 
 ```text
-/people active
-LiDAR active
-odom active
-controller produced linear.x = 0.10
-odom delta = +0.1408 m
-wheel delta = +1.4367 rad
-unknown geometry = 0
-generatedWorld has no legacy Ignition systems
+Managed nodes are active
+```
+
+Keep this terminal running.
+
+### Testing terminal: optional smaller Nav2 goal tolerance
+
+```bash
+source /opt/ros/jazzy/setup.bash
+cd ~/hunav_jazzy_ws
+source install/setup.bash
+
+python3 - <<'PY'
+import rclpy
+from rclpy.parameter import Parameter, parameter_value_to_python
+from rclpy.parameter_client import AsyncParameterClient
+
+NODE_NAME = "/cpr_j100_0001/controller_server"
+
+PARAMS_TO_GET = [
+    "goal_checker_plugins",
+    "general_goal_checker.xy_goal_tolerance",
+    "general_goal_checker.yaw_goal_tolerance",
+    "general_goal_checker.stateful",
+]
+
+rclpy.init()
+node = rclpy.create_node("set_nav2_goal_tolerance_debug")
+client = AsyncParameterClient(node, NODE_NAME)
+
+print(f"Waiting for parameter service: {NODE_NAME}")
+if not client.wait_for_services(timeout_sec=8.0):
+    print("FAIL: controller_server parameter service not available.")
+    node.destroy_node()
+    rclpy.shutdown()
+    raise SystemExit(1)
+
+print("\n===== current params =====")
+future = client.get_parameters(PARAMS_TO_GET)
+rclpy.spin_until_future_complete(node, future, timeout_sec=8.0)
+
+if future.result() is not None:
+    for name, value in zip(PARAMS_TO_GET, future.result().values):
+        try:
+            print(f"{name}: {parameter_value_to_python(value)}")
+        except Exception:
+            print(f"{name}: {value}")
+
+print("\n===== setting smaller tolerance =====")
+set_future = client.set_parameters([
+    Parameter("general_goal_checker.xy_goal_tolerance", Parameter.Type.DOUBLE, 0.08),
+    Parameter("general_goal_checker.yaw_goal_tolerance", Parameter.Type.DOUBLE, 0.25),
+])
+
+rclpy.spin_until_future_complete(node, set_future, timeout_sec=8.0)
+
+if set_future.result() is not None:
+    for result in set_future.result().results:
+        print(f"successful={result.successful}, reason={result.reason}")
+
+node.destroy_node()
+rclpy.shutdown()
+PY
+```
+
+### Terminal 6: Start RViz
+
+```bash
+source /opt/ros/jazzy/setup.bash
+cd ~/hunav_jazzy_ws
+source install/setup.bash
+
+export ROS_DOMAIN_ID=0
+export ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
+unset ROS_LOCALHOST_ONLY
+unset RMW_IMPLEMENTATION
+unset ROS_DISCOVERY_SERVER
+unset FASTRTPS_DEFAULT_PROFILES_FILE
+unset CYCLONEDDS_URI
+
+ros2 launch clearpath_viz view_navigation.launch.py \
+  namespace:=cpr_j100_0001 \
+  use_sim_time:=true
+```
+
+In RViz:
+
+```text
+Global Options -> Fixed Frame = map
+Map -> Topic = map
+```
+
+### Terminal 8: Optional Publish Point single-click navigation
+
+```bash
+source /opt/ros/jazzy/setup.bash
+cd ~/hunav_jazzy_ws
+source install/setup.bash
+
+export ROS_DOMAIN_ID=0
+export ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
+unset ROS_LOCALHOST_ONLY
+unset RMW_IMPLEMENTATION
+unset ROS_DISCOVERY_SERVER
+unset FASTRTPS_DEFAULT_PROFILES_FILE
+unset CYCLONEDDS_URI
+
+python3 - <<'PY'
+import math
+import rclpy
+
+from rclpy.action import ActionClient
+from geometry_msgs.msg import PointStamped
+from nav2_msgs.action import NavigateToPose
+from tf2_ros import Buffer, TransformListener
+
+ROBOT_NS = "/cpr_j100_0001"
+CLICKED_TOPICS = [f"{ROBOT_NS}/clicked_point", "/clicked_point"]
+ACTION_NAME = f"{ROBOT_NS}/navigate_to_pose"
+
+TARGET_FRAME = "map"
+ROBOT_FRAME = "base_link"
+MIN_GOAL_DISTANCE = 0.35
+
+
+def quat_from_yaw(yaw):
+    return math.sin(yaw / 2.0), math.cos(yaw / 2.0)
+
+
+rclpy.init(args=[
+    "--ros-args",
+    "-r", "/tf:=/cpr_j100_0001/tf",
+    "-r", "/tf_static:=/cpr_j100_0001/tf_static",
+])
+
+node = rclpy.create_node("publish_point_to_nav2_action_stable")
+tf_buffer = Buffer()
+tf_listener = TransformListener(tf_buffer, node)
+client = ActionClient(node, NavigateToPose, ACTION_NAME)
+
+
+def goal_response_cb(future):
+    goal_handle = future.result()
+
+    if goal_handle is None:
+        print("FAIL: no goal handle returned.", flush=True)
+        return
+
+    if not goal_handle.accepted:
+        print("FAIL: goal rejected by Nav2.", flush=True)
+        return
+
+    print("PASS: goal accepted by Nav2.", flush=True)
+
+
+def make_clicked_cb(source_topic):
+    def clicked_cb(msg):
+        print()
+        print("===== Publish Point clicked =====", flush=True)
+        print(f"source topic: {source_topic}", flush=True)
+        print(f"clicked frame: {msg.header.frame_id}", flush=True)
+        print(f"clicked x={msg.point.x:.3f}, y={msg.point.y:.3f}", flush=True)
+
+        if not client.server_is_ready():
+            print("Action server not ready yet, waiting up to 10s...", flush=True)
+            if not client.wait_for_server(timeout_sec=10.0):
+                print("FAIL: NavigateToPose action server still unavailable.", flush=True)
+                return
+
+        try:
+            tf = tf_buffer.lookup_transform(TARGET_FRAME, ROBOT_FRAME, rclpy.time.Time())
+            rx = tf.transform.translation.x
+            ry = tf.transform.translation.y
+        except Exception as e:
+            print("FAIL: cannot get map -> base_link TF.", flush=True)
+            print(str(e), flush=True)
+            return
+
+        gx = msg.point.x
+        gy = msg.point.y
+        dist = math.hypot(gx - rx, gy - ry)
+
+        print(f"robot map pose x={rx:.3f}, y={ry:.3f}", flush=True)
+        print(f"clicked distance from robot = {dist:.3f} m", flush=True)
+
+        if dist < MIN_GOAL_DISTANCE:
+            print(f"IGNORE: clicked point is too close (< {MIN_GOAL_DISTANCE:.2f} m).", flush=True)
+            return
+
+        yaw = math.atan2(gy - ry, gx - rx)
+        z, w = quat_from_yaw(yaw)
+
+        goal = NavigateToPose.Goal()
+        goal.pose.header.stamp = node.get_clock().now().to_msg()
+        goal.pose.header.frame_id = msg.header.frame_id if msg.header.frame_id else "map"
+        goal.pose.pose.position.x = gx
+        goal.pose.pose.position.y = gy
+        goal.pose.pose.position.z = 0.0
+        goal.pose.pose.orientation.z = z
+        goal.pose.pose.orientation.w = w
+        goal.behavior_tree = ""
+
+        print("Sending NavigateToPose goal...", flush=True)
+        print(f"goal x={gx:.3f}, y={gy:.3f}, yaw={math.degrees(yaw):.1f} deg", flush=True)
+
+        future = client.send_goal_async(goal)
+        future.add_done_callback(goal_response_cb)
+
+    return clicked_cb
+
+
+print("===== Publish Point -> Nav2 action stable daemon =====", flush=True)
+print(f"Action: {ACTION_NAME}", flush=True)
+
+for topic in CLICKED_TOPICS:
+    node.create_subscription(PointStamped, topic, make_clicked_cb(topic), 10)
+    print(f"Listening: {topic}", flush=True)
+
+print("T8 is now subscribed. Keep this terminal running.", flush=True)
+print("In RViz: choose Publish Point, then single-click a reachable point.", flush=True)
+
+try:
+    rclpy.spin(node)
+except KeyboardInterrupt:
+    pass
+
+node.destroy_node()
+rclpy.shutdown()
+PY
 ```
