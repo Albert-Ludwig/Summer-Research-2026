@@ -6,16 +6,16 @@
 
 ## 0. Terminal roles
 
-| Terminal   | Purpose                                               |
-| ---------- | ----------------------------------------------------- |
-| Terminal 1 | Background full HuNav + Gazebo simulation             |
-| Terminal 2 | Background Jackal spawn / controllers                 |
+| Terminal   | Purpose                                                |
+| ---------- | ------------------------------------------------------ |
+| Terminal 1 | Background full HuNav + Gazebo simulation              |
+| Terminal 2 | Background Jackal spawn / controllers                  |
 | Terminal 3 | Health checks / tests / Nav2 launch or tuning commands |
-| Terminal 4 | Cleanup / recovery terminal / SLAM launch             |
-| Terminal 5 | `/clock` bridge                                       |
-| Terminal 6 | RViz                                                  |
-| Terminal 7 | TF repair daemon                                      |
-| Terminal 8 | Optional Publish Point single-click navigation        |
+| Terminal 4 | Cleanup / recovery terminal / SLAM launch              |
+| Terminal 5 | `/clock` bridge                                        |
+| Terminal 6 | RViz                                                   |
+| Terminal 7 | TF repair daemon                                       |
+| Terminal 8 | Optional Publish Point single-click navigation         |
 
 ---
 
@@ -510,143 +510,4 @@ In RViz:
 ```text
 Global Options -> Fixed Frame = map
 Map -> Topic = map
-```
-
-### Terminal 8: Optional Publish Point single-click navigation
-
-```bash
-source /opt/ros/jazzy/setup.bash
-cd ~/hunav_jazzy_ws
-source install/setup.bash
-
-export ROS_DOMAIN_ID=0
-export ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
-unset ROS_LOCALHOST_ONLY
-unset RMW_IMPLEMENTATION
-unset ROS_DISCOVERY_SERVER
-unset FASTRTPS_DEFAULT_PROFILES_FILE
-unset CYCLONEDDS_URI
-
-python3 - <<'PY'
-import math
-import rclpy
-
-from rclpy.action import ActionClient
-from geometry_msgs.msg import PointStamped
-from nav2_msgs.action import NavigateToPose
-from tf2_ros import Buffer, TransformListener
-
-ROBOT_NS = "/cpr_j100_0001"
-CLICKED_TOPICS = [f"{ROBOT_NS}/clicked_point", "/clicked_point"]
-ACTION_NAME = f"{ROBOT_NS}/navigate_to_pose"
-
-TARGET_FRAME = "map"
-ROBOT_FRAME = "base_link"
-MIN_GOAL_DISTANCE = 0.35
-
-
-def quat_from_yaw(yaw):
-    return math.sin(yaw / 2.0), math.cos(yaw / 2.0)
-
-
-rclpy.init(args=[
-    "--ros-args",
-    "-r", "/tf:=/cpr_j100_0001/tf",
-    "-r", "/tf_static:=/cpr_j100_0001/tf_static",
-])
-
-node = rclpy.create_node("publish_point_to_nav2_action_stable")
-tf_buffer = Buffer()
-tf_listener = TransformListener(tf_buffer, node)
-client = ActionClient(node, NavigateToPose, ACTION_NAME)
-
-
-def goal_response_cb(future):
-    goal_handle = future.result()
-
-    if goal_handle is None:
-        print("FAIL: no goal handle returned.", flush=True)
-        return
-
-    if not goal_handle.accepted:
-        print("FAIL: goal rejected by Nav2.", flush=True)
-        return
-
-    print("PASS: goal accepted by Nav2.", flush=True)
-
-
-def make_clicked_cb(source_topic):
-    def clicked_cb(msg):
-        print()
-        print("===== Publish Point clicked =====", flush=True)
-        print(f"source topic: {source_topic}", flush=True)
-        print(f"clicked frame: {msg.header.frame_id}", flush=True)
-        print(f"clicked x={msg.point.x:.3f}, y={msg.point.y:.3f}", flush=True)
-
-        if not client.server_is_ready():
-            print("Action server not ready yet, waiting up to 10s...", flush=True)
-            if not client.wait_for_server(timeout_sec=10.0):
-                print("FAIL: NavigateToPose action server still unavailable.", flush=True)
-                return
-
-        try:
-            tf = tf_buffer.lookup_transform(TARGET_FRAME, ROBOT_FRAME, rclpy.time.Time())
-            rx = tf.transform.translation.x
-            ry = tf.transform.translation.y
-        except Exception as e:
-            print("FAIL: cannot get map -> base_link TF.", flush=True)
-            print(str(e), flush=True)
-            return
-
-        gx = msg.point.x
-        gy = msg.point.y
-        dist = math.hypot(gx - rx, gy - ry)
-
-        print(f"robot map pose x={rx:.3f}, y={ry:.3f}", flush=True)
-        print(f"clicked distance from robot = {dist:.3f} m", flush=True)
-
-        if dist < MIN_GOAL_DISTANCE:
-            print(f"IGNORE: clicked point is too close (< {MIN_GOAL_DISTANCE:.2f} m).", flush=True)
-            return
-
-        yaw = math.atan2(gy - ry, gx - rx)
-        z, w = quat_from_yaw(yaw)
-
-        goal = NavigateToPose.Goal()
-        goal.pose.header.stamp = node.get_clock().now().to_msg()
-        goal.pose.header.frame_id = msg.header.frame_id if msg.header.frame_id else "map"
-        goal.pose.pose.position.x = gx
-        goal.pose.pose.position.y = gy
-        goal.pose.pose.position.z = 0.0
-        goal.pose.pose.orientation.z = z
-        goal.pose.pose.orientation.w = w
-        goal.behavior_tree = ""
-
-        print("Sending NavigateToPose goal...", flush=True)
-        print(f"goal x={gx:.3f}, y={gy:.3f}, yaw={math.degrees(yaw):.1f} deg", flush=True)
-
-        future = client.send_goal_async(goal)
-        future.add_done_callback(goal_response_cb)
-
-    return clicked_cb
-
-
-print("===== Publish Point -> Nav2 action stable daemon =====", flush=True)
-print(f"Action: {ACTION_NAME}", flush=True)
-
-for topic in CLICKED_TOPICS:
-    node.create_subscription(PointStamped, topic, make_clicked_cb(topic), 10)
-    print(f"Listening: {topic}", flush=True)
-
-print("T8 is now subscribed. Keep this terminal running.", flush=True)
-print("In RViz: choose Publish Point, then single-click a reachable point.", flush=True)
-
-try:
-    rclpy.spin(node)
-except KeyboardInterrupt:
-    pass
-
-node.destroy_node()
-rclpy.shutdown()
-PY
 ```
