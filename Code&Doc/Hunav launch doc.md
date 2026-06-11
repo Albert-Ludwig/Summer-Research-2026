@@ -6,20 +6,19 @@
 
 ## 0. Terminal roles
 
-| Terminal   | Purpose                                                |
-| ---------- | ------------------------------------------------------ |
-| Terminal 1 | Background full HuNav + Gazebo simulation              |
-| Terminal 2 | Background Jackal spawn / controllers                  |
-| Terminal 3 | Health checks / tests / Nav2 launch or tuning commands |
-| Terminal 4 | Cleanup / recovery terminal / SLAM launch              |
-| Terminal 5 | `/clock` bridge                                        |
-| Terminal 6 | RViz                                                   |
-| Terminal 7 | TF repair daemon                                       |
-| Terminal 8 | Optional Publish Point single-click navigation         |
+| Terminal   | Purpose                                   |
+| ---------- | ----------------------------------------- |
+| Terminal 1 | Background full HuNav + Gazebo simulation |
+| Terminal 2 | Background Jackal spawn / controllers     |
+| Terminal 3 | Nav2 launch or tuning commands            |
+| Terminal 4 | SLAM launch                               |
+| Terminal 5 | `/clock` bridge                           |
+| Terminal 6 | RViz                                      |
+| Terminal 7 | TF repair daemon                          |
 
 ---
 
-## 1. Terminal 4: Optional clean-state reset
+## 1. Test terminal: Optional clean-state reset
 
 Use this first if the machine was not cleanly rebooted, or if Gazebo / ROS processes may still be running.
 
@@ -144,7 +143,7 @@ Keep this terminal running.
 
 ---
 
-## 5. Terminal 3: Minimal health check
+## 5. Test terminal: Minimal health check
 
 ```bash
 source /opt/ros/jazzy/setup.bash
@@ -210,7 +209,7 @@ UNKNOWN GEOMETRY COUNT = 0
 
 ---
 
-## 6. Terminal 3: Optional minimal motion test
+## 6. Test terminal: Optional minimal motion test
 
 ```bash
 source /opt/ros/jazzy/setup.bash
