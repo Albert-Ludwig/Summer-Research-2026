@@ -6,13 +6,16 @@
 
 ## 0. Terminal roles
 
-| Terminal   | Purpose                                   |
-| ---------- | ----------------------------------------- |
-| Terminal 1 | Background full HuNav + Gazebo simulation |
-| Terminal 2 | Background Jackal spawn / controllers     |
-| Terminal 3 | Health checks / tests                     |
-| Terminal 4 | Cleanup / recovery terminal               |
-| Terminal 5 | `/clock` bridge                           |
+| Terminal   | Purpose                                               |
+| ---------- | ----------------------------------------------------- |
+| Terminal 1 | Background full HuNav + Gazebo simulation             |
+| Terminal 2 | Background Jackal spawn / controllers                 |
+| Terminal 3 | Health checks / tests / Nav2 launch or tuning commands |
+| Terminal 4 | Cleanup / recovery terminal / SLAM launch             |
+| Terminal 5 | `/clock` bridge                                       |
+| Terminal 6 | RViz                                                  |
+| Terminal 7 | TF repair daemon                                      |
+| Terminal 8 | Optional Publish Point single-click navigation        |
 
 ---
 
