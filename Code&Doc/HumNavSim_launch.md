@@ -536,3 +536,69 @@ ros2 daemon start
 echo "===== REMAINING PROCESSES ====="
 pgrep -af "publish_point_to_nav2_action|jackal_tf_repair|view_navigation|rviz2|nav2.launch|slam.launch|robot_spawn|parameter_bridge|simulation_fortress|gz sim|ign gazebo|hunav|HuNav|cpr_j100"   || echo "PASS: no matching background daemons remain."
 ```
+
+---
+
+## Cleanup terminal: full daemon stop
+
+Use this when you want the simulation fully stopped and do not want to restart the ROS CLI daemon afterward.
+
+```bash
+source /opt/ros/jazzy/setup.bash
+cd ~/hunav_jazzy_ws
+source install/setup.bash 2>/dev/null || true
+
+echo "===== FULL STOP: SIMULATION, NAVIGATION, RVIZ, AND ROS DAEMON ====="
+
+for pattern in \
+  '[p]ublish_point_to_nav2_action' \
+  '[j]ackal_tf_repair' \
+  '[v]iew_navigation.launch.py' \
+  '[r]viz2' \
+  '[n]av2.launch.py' \
+  '[s]lam.launch.py' \
+  '[r]obot_spawn.launch.py' \
+  '[p]arameter_bridge' \
+  '[s]imulation_fortress.launch.py' \
+  '[g]z sim' \
+  '[i]gn gazebo' \
+  '[h]unav' \
+  '[H]uNav' \
+  '[c]pr_j100_0001'
+do
+  pkill -INT -f "$pattern" 2>/dev/null || true
+done
+
+sleep 3
+
+for pattern in \
+  '[p]ublish_point_to_nav2_action' \
+  '[j]ackal_tf_repair' \
+  '[v]iew_navigation.launch.py' \
+  '[r]viz2' \
+  '[n]av2.launch.py' \
+  '[s]lam.launch.py' \
+  '[r]obot_spawn.launch.py' \
+  '[p]arameter_bridge' \
+  '[s]imulation_fortress.launch.py' \
+  '[g]z sim' \
+  '[i]gn gazebo' \
+  '[h]unav' \
+  '[H]uNav' \
+  '[c]pr_j100_0001'
+do
+  pkill -KILL -f "$pattern" 2>/dev/null || true
+done
+
+echo "===== STOP ROS CLI DAEMON AND CLEAR LOCAL STATE ====="
+ros2 daemon stop 2>/dev/null || true
+rm -rf ~/.ros/log/* 2>/dev/null || true
+rm -f run_hunav_cold_start.log slam_toolbox_debug.log nav2_debug.log spawn_jackal_cold_start.log 2>/dev/null || true
+rm -f /tmp/launch_params_* 2>/dev/null || true
+
+echo "===== VERIFY NO MATCHING DAEMONS REMAIN ====="
+pgrep -af "publish_point_to_nav2_action|jackal_tf_repair|view_navigation|rviz2|nav2.launch|slam.launch|robot_spawn|parameter_bridge|simulation_fortress|gz sim|ign gazebo|hunav|HuNav|cpr_j100" \
+  || echo "PASS: no matching background daemons remain."
+
+ros2 daemon status 2>/dev/null || echo "PASS: ROS CLI daemon is stopped."
+```

@@ -2,16 +2,16 @@
 
 ## 1. Tested System
 
-| Item                     | Verified Setup                     |
-| ------------------------ | ---------------------------------- |
-| Robot                    | Clearpath Jackal J100              |
-| ROS 2 Distribution       | Jazzy                              |
-| Simulator                | Gazebo Harmonic via `clearpath_gz` |
-| Mapping                  | `slam_toolbox`                     |
-| Navigation               | Nav2                               |
-| Robot Namespace          | `/cpr_j100_0001`                   |
-| Gazebo Model Name        | `cpr_j100_0001`                    |
-| Alternative World Tested | `office`                           |
+| Item                                   | Verified Setup                     |
+| -------------------------------------- | ---------------------------------- |
+| Robot                                  | Clearpath Jackal J100              |
+| ROS 2 Distribution                     | Jazzy                              |
+| Simulator                              | Gazebo Harmonic via `clearpath_gz` |
+| Mapping                                | `slam_toolbox`                     |
+| Navigation                             | Nav2                               |
+| Robot Namespace                        | `/cpr_j100_0001`                   |
+| Gazebo Model Name used by HuNav plugin | `cpr_j100_0001/robot`              |
+| Alternative World Tested               | `office`                           |
 
 ## 2. Verified Runtime Interfaces
 
