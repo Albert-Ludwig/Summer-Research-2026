@@ -1,0 +1,13 @@
+========== Evaluation Results ==========
+Evaluation mode: Standard
+Number of test episodes: 50
+Success Rate: 60.00 %
+Timeout Rate: 32.00 %
+Agent Collision Rate: 8.00 %
+Static Map Collision Rate: 0.00 %
+Total Collision Rate: 8.00 %
+Average Time to Goal: 13.108
+Average Path Length to Goal: 7.949
+Average Minimum Distance to Obstacles: 1.210
+Average Per-Episode Avg Min Distance: 2.657
+Policy: ETHUCY Dataset3.1

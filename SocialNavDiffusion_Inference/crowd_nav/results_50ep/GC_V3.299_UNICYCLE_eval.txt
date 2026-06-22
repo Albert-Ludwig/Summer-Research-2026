@@ -1,0 +1,7 @@
+========== Evaluation Results ==========
+Average Time to Goal: 11.720
+Average Path Length to Goal: 11.272
+Success Rate: 50.00 %
+Average Minimum Distance to Obstacles: 0.879
+Average Per-Episode Average Minimum Distance to Obstacles: 2.205
+For: GC_V3.299_UNICYCLE, Number of test episodes: 50

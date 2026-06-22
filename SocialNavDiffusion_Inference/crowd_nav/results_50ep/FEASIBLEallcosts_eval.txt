@@ -1,0 +1,11 @@
+========== Evaluation Results ==========
+Evaluation mode: Standard
+Number of test episodes: 50
+Success Rate: 0.00 %
+Timeout Rate: 90.00 %
+Collision Rate: 10.00 %
+Average Time to Goal: nan
+Average Path Length to Goal: nan
+Average Minimum Distance to Obstacles: 2.224
+Average Per-Episode Avg Min Distance: 12.984
+Policy: FEASIBLEallcosts

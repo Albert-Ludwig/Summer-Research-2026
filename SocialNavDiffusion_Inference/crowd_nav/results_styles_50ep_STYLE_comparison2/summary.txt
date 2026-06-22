@@ -1,0 +1,51 @@
+============================================================
+Style-Sweep Evaluation Summary
+Scenes evaluated: 50
+============================================================
+
+Variant                 SR%    TO%    CR%  WallCR%    AvgT   AvgPL  AvgMinD
+----------------------------------------------------------------------------
+neutral+proj           90.0    6.0    4.0      0.0   6.494   6.169    0.271
+prox+proj              42.0   54.0    4.0      0.0   8.155   6.162    0.774
+pass+proj              92.0    4.0    4.0      0.0   7.370   6.299    0.353
+yield+proj             94.0    2.0    4.0      0.0   7.851   6.900    0.346
+group+proj             94.0    2.0    4.0      0.0   6.745   6.303    0.272
+neutral-noproj         42.0   12.0   46.0      0.0   9.131   6.441    0.134
+prox-proj              94.0    2.0    4.0      0.0   6.580   6.258    0.224
+pass-proj              94.0    2.0    4.0      0.0   6.979   6.390    0.307
+yield-proj             92.0    4.0    4.0      0.0   6.962   6.255    0.195
+group-proj             90.0    6.0    4.0      0.0   6.450   6.180    0.239
+
+Column key:
+  SR%    = Success Rate
+  TO%    = Timeout Rate
+  CR%    = Agent Collision Rate
+  WallCR%= Static Map Collision Rate
+  AvgT   = Average Time to Goal (successful episodes)
+  AvgPL  = Average Path Length to Goal (successful episodes)
+  AvgMinD= Average Minimum Distance to Obstacles (all episodes)
+
+
+Social Style Metrics (fixed neutral scale — comparable across variants)
+Expected direction per axis:
+  prox+  → lower prox_violation_frac, higher mean_min_clearance
+  prox-  → higher prox_violation_frac, lower mean_min_clearance
+  pass+  → pass_side_mean toward -1 (right-hand traffic)
+  pass-  → pass_side_mean toward +1 (left-hand traffic)
+  yield+ → lower headon_rate, lower cutoff_rate
+  yield- → higher headon_rate, higher cutoff_rate
+  group+ → lower group_split_score
+  group- → higher group_split_score
+
+Variant               ProxViol  MinClear  PassMean  PassCons  HeadonR  CutoffR  GrpSplit
+-----------------------------------------------------------------------------------------
+neutral+proj            0.5202     2.045    -0.032     0.402   0.0599   0.0725    0.0095
+prox+proj               0.5284     2.100    -0.042     0.488   0.0482   0.0514    0.0049
+pass+proj               0.4739     2.133    +0.103     0.439   0.0522   0.0686    0.0054
+yield+proj              0.4899     2.077    -0.052     0.408   0.0486   0.0529    0.0108
+group+proj              0.5034     2.081    +0.059     0.400   0.0572   0.0709    0.0045
+neutral-noproj          0.5374     1.923    -0.094     0.346   0.2507   0.2153    0.0162
+prox-proj               0.5057     2.061    +0.084     0.383   0.0702   0.0813    0.0099
+pass-proj               0.4879     2.119    -0.079     0.407   0.0585   0.0619    0.0028
+yield-proj              0.5254     2.010    -0.041     0.405   0.0907   0.0931    0.0215
+group-proj              0.5089     2.067    +0.003     0.426   0.0616   0.0786    0.0254

@@ -1,0 +1,22 @@
+========== Evaluation Results ==========
+Evaluation mode: NPZ Hard
+NPZ directory: /home/cschaibl/projects/aip-sl2smith/cschaibl/diffusion_planning/diffusion_STAGE_B/InteriorGSMAPS
+Number of test episodes: 50
+Success Rate: 54.00 %
+Timeout Rate: 16.00 %
+Agent Collision Rate: 28.00 %
+Static Map Collision Rate: 2.00 %
+Total Collision Rate: 30.00 %
+Average Time to Goal: 6.185
+Average Path Length to Goal: 3.415
+Average Minimum Distance to Obstacles: 0.252
+Average Per-Episode Avg Min Distance: 0.529
+Policy: SOCIAL_InteriorGS
+
+--- Per Threat Type ---
+  frontal   : n=  20  SR=60.0%  AgentCR=25.0%  MapCR=0.0%  minD=0.237
+  group     : n=   4  SR=75.0%  AgentCR=0.0%  MapCR=0.0%  minD=0.323
+  mixed     : n=   6  SR=50.0%  AgentCR=33.3%  MapCR=16.7%  minD=0.272
+  pincer    : n=   4  SR=0.0%  AgentCR=50.0%  MapCR=0.0%  minD=0.075
+  rear      : n=   8  SR=37.5%  AgentCR=50.0%  MapCR=0.0%  minD=0.216
+  side      : n=   8  SR=75.0%  AgentCR=12.5%  MapCR=0.0%  minD=0.367

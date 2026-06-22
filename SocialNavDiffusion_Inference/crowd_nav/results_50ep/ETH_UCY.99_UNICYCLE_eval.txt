@@ -1,0 +1,7 @@
+========== Evaluation Results ==========
+Average Time to Goal: 7.699
+Average Path Length to Goal: 5.973
+Success Rate: 78.00 %
+Average Minimum Distance to Obstacles: 1.089
+Average Per-Episode Average Minimum Distance to Obstacles: 2.126
+For: ETH_UCY.99_UNICYCLE, Number of test episodes: 50

@@ -1,0 +1,17 @@
+========== Evaluation Results ==========
+Evaluation mode: Standard
+Number of test episodes: 50
+Map types evaluated: corridor, room, doorway, pillars, narrow_passage, L_corner, single_wall, open
+Success Rate: 58.00 %
+Timeout Rate: 30.00 %
+Agent Collision Rate: 2.00 %
+Static Map Collision Rate: 10.00 %
+Total Collision Rate: 12.00 %
+Average Time to Goal: 7.491
+Average Path Length to Goal: 4.566
+Average Minimum Distance to Obstacles: 0.176
+Average Per-Episode Avg Min Distance: 0.548
+Policy: SOCIAL_ALLMAPS3
+
+--- Per Map Type ---
+  unknown   : n=  50  SR=58.0%  AgentCR=2.0%  MapCR=10.0%  minD=0.176

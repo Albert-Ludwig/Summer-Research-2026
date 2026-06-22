@@ -1,0 +1,7 @@
+========== Evaluation Results ==========
+Average Time to Goal: 14.130
+Average Path Length to Goal: 34.482
+Success Rate: 46.00 %
+Average Minimum Distance to Obstacles: 0.795
+Average Per-Episode Average Minimum Distance to Obstacles: 2.220
+For: stage_B_v7, Number of test episodes: 50

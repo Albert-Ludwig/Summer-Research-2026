@@ -1,0 +1,13 @@
+========== Evaluation Results ==========
+Evaluation mode: Standard
+Number of test episodes: 50
+Success Rate: 98.00 %
+Timeout Rate: 0.00 %
+Agent Collision Rate: 2.00 %
+Static Map Collision Rate: 0.00 %
+Total Collision Rate: 2.00 %
+Average Time to Goal: 9.347
+Average Path Length to Goal: 8.300
+Average Minimum Distance to Obstacles: 1.556
+Average Per-Episode Avg Min Distance: 2.974
+Policy: Edinburgh Dataset3.1

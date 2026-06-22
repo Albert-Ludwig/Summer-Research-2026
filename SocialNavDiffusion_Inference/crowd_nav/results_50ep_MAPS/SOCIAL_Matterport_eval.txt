@@ -1,0 +1,22 @@
+========== Evaluation Results ==========
+Evaluation mode: NPZ Hard
+NPZ directory: /home/cschaibl/projects/aip-sl2smith/cschaibl/diffusion_planning/diffusion_STAGE_B/MatterportMAPS
+Number of test episodes: 50
+Success Rate: 56.00 %
+Timeout Rate: 12.00 %
+Agent Collision Rate: 32.00 %
+Static Map Collision Rate: 0.00 %
+Total Collision Rate: 32.00 %
+Average Time to Goal: 5.161
+Average Path Length to Goal: 3.482
+Average Minimum Distance to Obstacles: 0.228
+Average Per-Episode Avg Min Distance: 0.564
+Policy: SOCIAL_Matterport
+
+--- Per Threat Type ---
+  frontal   : n=  22  SR=54.5%  AgentCR=40.9%  MapCR=0.0%  minD=0.181
+  group     : n=   3  SR=100.0%  AgentCR=0.0%  MapCR=0.0%  minD=0.325
+  mixed     : n=   5  SR=60.0%  AgentCR=40.0%  MapCR=0.0%  minD=0.132
+  pincer    : n=   5  SR=80.0%  AgentCR=0.0%  MapCR=0.0%  minD=0.686
+  rear      : n=   6  SR=16.7%  AgentCR=50.0%  MapCR=0.0%  minD=0.084
+  side      : n=   9  SR=55.6%  AgentCR=22.2%  MapCR=0.0%  minD=0.203

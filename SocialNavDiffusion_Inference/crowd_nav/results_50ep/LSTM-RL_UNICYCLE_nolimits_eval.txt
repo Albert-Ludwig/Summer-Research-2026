@@ -1,0 +1,7 @@
+========== Evaluation Results ==========
+Average Time to Goal: 4.203
+Average Path Length to Goal: 6.531
+Success Rate: 96.00 %
+Average Minimum Distance to Obstacles: 1.238
+Average Per-Episode Average Minimum Distance to Obstacles: 2.400
+For: LSTM-RL_UNICYCLE_nolimits, Number of test episodes: 50

@@ -1,0 +1,13 @@
+========== Evaluation Results ==========
+Evaluation mode: Standard
+Number of test episodes: 50
+Success Rate: 100.00 %
+Timeout Rate: 0.00 %
+Agent Collision Rate: 0.00 %
+Static Map Collision Rate: 0.00 %
+Total Collision Rate: 0.00 %
+Average Time to Goal: 8.900
+Average Path Length to Goal: 8.301
+Average Minimum Distance to Obstacles: 1.714
+Average Per-Episode Avg Min Distance: 3.070
+Policy: SDD CLEAN

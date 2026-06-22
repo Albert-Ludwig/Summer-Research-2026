@@ -1,0 +1,13 @@
+========== Evaluation Results ==========
+Evaluation mode: Standard
+Number of test episodes: 50
+Success Rate: 68.00 %
+Timeout Rate: 28.00 %
+Agent Collision Rate: 4.00 %
+Static Map Collision Rate: 0.00 %
+Total Collision Rate: 4.00 %
+Average Time to Goal: 14.368
+Average Path Length to Goal: 7.829
+Average Minimum Distance to Obstacles: 1.527
+Average Per-Episode Avg Min Distance: 3.092
+Policy: GC CLEAN

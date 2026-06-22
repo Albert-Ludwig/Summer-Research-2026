@@ -21,3 +21,10 @@ The research was conducted under the supervision of **Dr. Stephen L. Smith**, Pr
 
 - Research Fellow, University of Waterloo (Rising Stars 2026)
 - Mechatronics Engineering, McMaster University
+
+## Research Project
+
+This is the repositry made by Christian Schaible, who is a PhD student at the University of Waterloo. The project is focused on developing a novel approach for social navigation in autonomous robots using diffusion models. The goal is to enable robots to navigate complex environments while considering social norms and human interactions.
+
+This is the project that I worked on during my fellowship, and it is a continuation of the work done by Christian Schaible. The original repository can be found at
+https://github.com/schaiblc/SocialNavDiffusion_Inference.git

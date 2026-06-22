@@ -1,0 +1,7 @@
+========== Evaluation Results ==========
+Average Time to Goal: 6.367
+Average Path Length to Goal: 6.068
+Success Rate: 98.00 %
+Average Minimum Distance to Obstacles: 1.035
+Average Per-Episode Average Minimum Distance to Obstacles: 2.174
+For: CADRL, Number of test episodes: 50

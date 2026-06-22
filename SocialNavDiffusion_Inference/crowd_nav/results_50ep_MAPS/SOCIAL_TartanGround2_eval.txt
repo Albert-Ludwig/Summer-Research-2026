@@ -1,0 +1,17 @@
+========== Evaluation Results ==========
+Evaluation mode: Standard
+Number of test episodes: 50
+Map types evaluated: corridor, room, doorway, pillars, narrow_passage, L_corner, single_wall, open
+Success Rate: 92.00 %
+Timeout Rate: 8.00 %
+Agent Collision Rate: 0.00 %
+Static Map Collision Rate: 0.00 %
+Total Collision Rate: 0.00 %
+Average Time to Goal: 6.152
+Average Path Length to Goal: 3.950
+Average Minimum Distance to Obstacles: 0.396
+Average Per-Episode Avg Min Distance: 0.843
+Policy: SOCIAL_TartanGround2
+
+--- Per Map Type ---
+  unknown   : n=  50  SR=92.0%  AgentCR=0.0%  MapCR=0.0%  minD=0.396

@@ -1,0 +1,7 @@
+========== Evaluation Results ==========
+Average Time to Goal: 3.906
+Average Path Length to Goal: 6.163
+Success Rate: 96.00 %
+Average Minimum Distance to Obstacles: 1.295
+Average Per-Episode Average Minimum Distance to Obstacles: 2.408
+For: CADRL_UNICYCLE_nolimits, Number of test episodes: 50

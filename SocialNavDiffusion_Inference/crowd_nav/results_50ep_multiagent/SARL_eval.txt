@@ -1,0 +1,62 @@
+========== Evaluation Results ==========
+Mode: Standard [MULTI-AGENT]
+Agents per episode: 8
+Episodes: 50
+
+--- Agent-0 / Single-Agent Metrics ---
+Success Rate:              88.00 %
+Avg Time to Goal:          4.426 s
+Avg Path Length:           7.837 m
+Avg Min Obs Dist:          0.726 m
+Avg Per-Ep Avg Min Dist:   1.713 m
+
+--- Multi-Agent Aggregate Metrics ---
+Agents per episode:              8
+
+  OUTCOME
+    Joint Success Rate:          36.0 %
+    Avg Episode Success Rate:    85.5 %
+    Avg Episode Collision Rate:  6.8 %
+    Avg Episode Timeout Rate:    7.8 %
+    Deadlock Pairs (avg):        0.00
+
+  EFFICIENCY
+    Avg Time to Goal:            4.455 s
+    Std Time to Goal:            2.354 s
+    Completion Spread (std TTG): 2.354 s
+    Avg Path Length:             7.431 m
+    Avg Path Efficiency:         0.944
+
+  SAFETY
+    Avg Min Obs Dist:            0.928 m
+    Min Min Obs Dist:            0.143 m
+    Avg Avg Obs Dist:            1.941 m
+    Avg Time in Danger (steps):  1.4
+    Avg Space Violations:        3.6
+    Avg Near Misses:             2.5
+    Avg Head-On Events:          5.2
+
+  SMOOTHNESS
+    Avg Speed:                   1.660 m/s
+    Avg Acceleration:            3.145 m/s²
+    Avg Jerk:                    20.195 m/s³
+    Smoothness Index:            0.048
+    Avg Angular Velocity:        1.369 rad/s
+    Avg Path Irregularity:       1.997
+    Avg Direction Changes:       0.0
+    Avg Freeze Events:           0.2
+
+  SOCIAL
+    Avg Yielding Events:         0.0
+    Avg Cut-In Events:           0.0
+    Avg Side-Pass Right:         0.0
+    Avg Side-Pass Left:          0.0
+    Side-Pass Bias (0=sym):      N/A
+    Avg Disturbance Caused:      0.014
+
+  EFFORT
+    Avg Control Effort:          13.104
+
+  JOINT COHESION
+    Avg Pairwise Distance:       7.016 m
+    Std Pairwise Distance:       3.203 m

@@ -1,0 +1,7 @@
+========== Evaluation Results ==========
+Average Time to Goal: 9.106
+Average Path Length to Goal: 9.155
+Success Rate: 66.00 %
+Average Minimum Distance to Obstacles: 1.018
+Average Per-Episode Average Minimum Distance to Obstacles: 2.019
+For: GC_noRot.99, Number of test episodes: 50

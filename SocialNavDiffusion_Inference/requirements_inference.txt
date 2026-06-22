@@ -1,0 +1,16 @@
+gitpython
+gym
+matplotlib
+numpy
+scipy
+torch
+torchvision
+diffusers
+casadi
+rvo2
+wandb
+torchviz
+
+# acados Python interface is normally installed from a local acados checkout:
+#   export ACADOS_SOURCE_DIR=/path/to/acados
+#   pip install -e "$ACADOS_SOURCE_DIR/interfaces/acados_template"

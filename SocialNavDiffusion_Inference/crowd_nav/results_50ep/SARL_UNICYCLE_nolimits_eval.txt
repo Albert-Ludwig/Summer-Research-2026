@@ -1,0 +1,7 @@
+========== Evaluation Results ==========
+Average Time to Goal: 3.577
+Average Path Length to Goal: 5.700
+Success Rate: 98.00 %
+Average Minimum Distance to Obstacles: 1.143
+Average Per-Episode Average Minimum Distance to Obstacles: 2.205
+For: SARL_UNICYCLE_nolimits, Number of test episodes: 50

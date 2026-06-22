@@ -1,0 +1,25 @@
+# editors
+.idea/
+.vscode/
+
+# Python
+*.egg-info/
+.pytest_cache/
+__pycache__
+.cache/
+.venv/
+venv*/
+.git_backup/
+
+# data
+data/
+*.mp4
+videos/
+*.pt
+
+# local/generated acados outputs from smoke tests
+/acados_proj_ocp.json
+/c_generated_proj/
+
+# Allow mp4 in results* subfolders
+!**/results*/**/*.mp4

@@ -1,0 +1,7 @@
+========== Evaluation Results ==========
+Average Time to Goal: 6.579
+Average Path Length to Goal: 5.583
+Success Rate: 82.00 %
+Average Minimum Distance to Obstacles: 1.217
+Average Per-Episode Average Minimum Distance to Obstacles: 2.112
+For: noPROX32, Number of test episodes: 50

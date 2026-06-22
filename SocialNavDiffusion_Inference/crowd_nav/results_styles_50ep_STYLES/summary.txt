@@ -1,0 +1,22 @@
+============================================================
+Style-Sweep Evaluation Summary
+Scenes evaluated: 50
+============================================================
+
+Variant                 SR%    TO%    CR%  WallCR%    AvgT   AvgPL  AvgMinD
+----------------------------------------------------------------------------
+neutral+proj           78.0   10.0    2.0     10.0   6.737   4.860    0.167
+prox+proj              80.0   12.0    0.0      8.0   6.662   4.824    0.170
+pass+proj              84.0    6.0    2.0      8.0   6.827   4.887    0.167
+yield+proj             88.0    6.0    0.0      6.0   7.273   5.077    0.172
+group+proj             84.0    6.0    4.0      6.0   6.827   4.963    0.173
+neutral-noproj         16.0    8.0   20.0     56.0   8.156   4.629    0.047
+
+Column key:
+  SR%    = Success Rate
+  TO%    = Timeout Rate
+  CR%    = Agent Collision Rate
+  WallCR%= Static Map Collision Rate
+  AvgT   = Average Time to Goal (successful episodes)
+  AvgPL  = Average Path Length to Goal (successful episodes)
+  AvgMinD= Average Minimum Distance to Obstacles (all episodes)
