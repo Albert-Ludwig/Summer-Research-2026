@@ -4,6 +4,14 @@
 
 Run daemon commands only in numbered terminals. Run non-daemon checks only in **Test terminal**.
 
+## Window
+
+VNC window for ROS2:
+
+```
+localhost:6080
+```
+
 ## Startup order
 
 1. Terminal 1: HuNav + Gazebo
