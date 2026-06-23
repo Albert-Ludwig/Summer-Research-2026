@@ -35,6 +35,7 @@ unset RMW_IMPLEMENTATION
 unset ROS_DISCOVERY_SERVER
 unset FASTRTPS_DEFAULT_PROFILES_FILE
 unset CYCLONEDDS_URI
+unset FASTDDS_BUILTIN_TRANSPORTS
 ```
 
 ---
@@ -53,6 +54,7 @@ unset RMW_IMPLEMENTATION
 unset ROS_DISCOVERY_SERVER
 unset FASTRTPS_DEFAULT_PROFILES_FILE
 unset CYCLONEDDS_URI
+unset FASTDDS_BUILTIN_TRANSPORTS
 
 export HUNAV_SHARE="$HOME/hunav_jazzy_ws/install/hunav_gazebo_fortress_wrapper/share/hunav_gazebo_fortress_wrapper"
 export HUNAV_LIB="$HOME/hunav_jazzy_ws/install/hunav_gazebo_fortress_wrapper/lib"
@@ -92,6 +94,7 @@ unset RMW_IMPLEMENTATION
 unset ROS_DISCOVERY_SERVER
 unset FASTRTPS_DEFAULT_PROFILES_FILE
 unset CYCLONEDDS_URI
+unset FASTDDS_BUILTIN_TRANSPORTS
 
 if gz topic -l | grep -qx "/clock"; then
   ros2 run ros_gz_bridge parameter_bridge \
@@ -122,6 +125,7 @@ unset RMW_IMPLEMENTATION
 unset ROS_DISCOVERY_SERVER
 unset FASTRTPS_DEFAULT_PROFILES_FILE
 unset CYCLONEDDS_URI
+unset FASTDDS_BUILTIN_TRANSPORTS
 
 rm -f ~/hunav_jazzy_ws/spawn_jackal_cold_start.log
 
@@ -156,6 +160,7 @@ unset RMW_IMPLEMENTATION
 unset ROS_DISCOVERY_SERVER
 unset FASTRTPS_DEFAULT_PROFILES_FILE
 unset CYCLONEDDS_URI
+unset FASTDDS_BUILTIN_TRANSPORTS
 
 python3 - <<'PY'
 import rclpy
@@ -247,6 +252,7 @@ unset RMW_IMPLEMENTATION
 unset ROS_DISCOVERY_SERVER
 unset FASTRTPS_DEFAULT_PROFILES_FILE
 unset CYCLONEDDS_URI
+unset FASTDDS_BUILTIN_TRANSPORTS
 
 rm -f slam_toolbox_debug.log
 
@@ -274,6 +280,7 @@ unset RMW_IMPLEMENTATION
 unset ROS_DISCOVERY_SERVER
 unset FASTRTPS_DEFAULT_PROFILES_FILE
 unset CYCLONEDDS_URI
+unset FASTDDS_BUILTIN_TRANSPORTS
 
 rm -f nav2_debug.log
 
@@ -293,13 +300,60 @@ Keep running.
 
 ---
 
+## Test terminal: required pre-check before Terminal 9
+
+```bash
+source /opt/ros/jazzy/setup.bash
+cd ~/hunav_jazzy_ws
+source install/setup.bash
+
+export ROS_DOMAIN_ID=0
+export ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
+unset ROS_LOCALHOST_ONLY
+unset RMW_IMPLEMENTATION
+unset ROS_DISCOVERY_SERVER
+unset FASTRTPS_DEFAULT_PROFILES_FILE
+unset CYCLONEDDS_URI
+unset FASTDDS_BUILTIN_TRANSPORTS
+
+echo "===== /clock ====="
+timeout 5s ros2 topic echo /clock --once >/dev/null \
+  && echo "PASS: /clock active" \
+  || echo "FAIL: /clock inactive"
+
+echo
+echo "===== /people ====="
+timeout 10s ros2 topic echo /people --once | grep -E "name:|^[[:space:]]+x:|^[[:space:]]+y:" \
+  || echo "FAIL: /people no sample"
+
+echo
+echo "===== odom ====="
+timeout 10s ros2 topic echo /cpr_j100_0001/platform/odom --once >/dev/null \
+  && echo "PASS: odom active" \
+  || echo "FAIL: odom inactive"
+
+echo
+echo "===== odom info ====="
+ros2 topic info /cpr_j100_0001/platform/odom --verbose | grep -E "Publisher count:|Subscription count:|Node name:|Topic type:|Endpoint type:" -A1 || true
+```
+
+Do not start Terminal 9 until `/clock`, `/people`, and `/cpr_j100_0001/platform/odom` are active. If Terminal 9 was started before odom/people were active, restart Terminal 9 after the inputs recover.
+
+---
+
 ## Terminal 9: SocialNavDiffusion node
 
-Do **not** manually activate the venv here. The node trampoline switches to:
+Notes:
+
+- Do **not** manually activate the venv here. The node trampoline switches to:
 
 ```text
 /workspace/SocialNavDiffusion_Inference/.venv/bin/python
 ```
+
+- Start Terminal 9 only after the pre-check passes.
+- If Terminal 9 only prints `waiting for /cpr_j100_0001/platform/odom`, stop it and fix odom first.
+- If Terminal 9 was already running while odom or people were missing, restart Terminal 9 after inputs recover.
 
 ```bash
 cd /home/ubuntu/hunav_jazzy_ws
@@ -316,6 +370,7 @@ unset RMW_IMPLEMENTATION
 unset ROS_DISCOVERY_SERVER
 unset FASTRTPS_DEFAULT_PROFILES_FILE
 unset CYCLONEDDS_URI
+unset FASTDDS_BUILTIN_TRANSPORTS
 
 ros2 run social_nav_diffusion_ros social_nav_diffusion_node
 ```
@@ -347,6 +402,7 @@ unset RMW_IMPLEMENTATION
 unset ROS_DISCOVERY_SERVER
 unset FASTRTPS_DEFAULT_PROFILES_FILE
 unset CYCLONEDDS_URI
+unset FASTDDS_BUILTIN_TRANSPORTS
 
 ros2 launch clearpath_viz view_navigation.launch.py \
   namespace:=cpr_j100_0001 \
@@ -363,6 +419,12 @@ Displays:
 - Map        -> /cpr_j100_0001/map
 - LaserScan  -> /cpr_j100_0001/sensors/lidar2d_0/scan
 - Marker     -> /social_nav_diffusion/debug_trajectory
+
+SocialNavDiffusion Marker:
+- Add display type: Marker, not MarkerArray.
+- Topic: /social_nav_diffusion/debug_trajectory.
+- If the topic does not appear in the dropdown, manually type /social_nav_diffusion/debug_trajectory.
+- Fixed Frame must be map because the Marker publishes frame_id: map.
 
 Use Nav2 Goal first.
 Do not use Publish Point unless Terminal 8 is running.
@@ -384,6 +446,7 @@ unset RMW_IMPLEMENTATION
 unset ROS_DISCOVERY_SERVER
 unset FASTRTPS_DEFAULT_PROFILES_FILE
 unset CYCLONEDDS_URI
+unset FASTDDS_BUILTIN_TRANSPORTS
 
 echo "===== /clock ====="
 timeout 5s ros2 topic echo /clock --once >/dev/null \
@@ -418,9 +481,140 @@ ros2 lifecycle get /cpr_j100_0001/controller_server || true
 ros2 lifecycle get /cpr_j100_0001/bt_navigator || true
 
 echo
-echo "===== SocialNavDiffusion ====="
-timeout 20s ros2 topic echo /social_nav_diffusion/debug_action --once || true
+echo "===== SocialNavDiffusion endpoints ====="
+ros2 topic info /social_nav_diffusion/debug_action --verbose || true
+ros2 topic info /social_nav_diffusion/debug_trajectory --verbose || true
+
+echo
+echo "===== SocialNavDiffusion debug action ====="
+timeout 120s ros2 topic echo /social_nav_diffusion/debug_action std_msgs/msg/String --once \
+  || echo "FAIL: no debug_action message in 120s"
+
+echo
+echo "===== SocialNavDiffusion trajectory marker ====="
+timeout 120s ros2 topic echo /social_nav_diffusion/debug_trajectory visualization_msgs/msg/Marker --once \
+  | grep -E "frame_id:|ns:|id:|type:|action:|points:|- x:|  y:" \
+  | head -60
 ```
+
+Expected successful output:
+
+```text
+people count: 3
+used_projection: True
+frame_id: map
+type: 4
+points:
+```
+
+---
+
+## If RViz does not show the SocialNavDiffusion Marker
+
+### A. Confirm the Marker publisher exists
+
+```bash
+source /opt/ros/jazzy/setup.bash
+cd ~/hunav_jazzy_ws
+source install/setup.bash
+
+export ROS_DOMAIN_ID=0
+export ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
+unset ROS_LOCALHOST_ONLY
+unset RMW_IMPLEMENTATION
+unset ROS_DISCOVERY_SERVER
+unset FASTRTPS_DEFAULT_PROFILES_FILE
+unset CYCLONEDDS_URI
+unset FASTDDS_BUILTIN_TRANSPORTS
+
+ros2 topic info /social_nav_diffusion/debug_trajectory --verbose || true
+ros2 topic info /social_nav_diffusion/debug_action --verbose || true
+```
+
+Interpretation:
+
+- Publisher count: 1 means SocialNavDiffusion has created the debug publishers.
+- Publisher count: 0 or Unknown topic means Terminal 9 is not publishing or ROS graph discovery is broken.
+
+### B. Confirm SocialNavDiffusion is subscribed to both inputs
+
+```bash
+ros2 topic info /cpr_j100_0001/platform/odom --verbose | grep -E "Publisher count:|Subscription count:|Node name:|Topic type:|Endpoint type:" -A1
+ros2 topic info /people --verbose | grep -E "Publisher count:|Subscription count:|Node name:|Topic type:|Endpoint type:" -A1
+```
+
+Expected:
+
+- `/cpr_j100_0001/platform/odom` has Publisher count: 1.
+- `/people` has Publisher count: 1.
+- `social_nav_diffusion_node` appears as a SUBSCRIPTION under both topics.
+
+### C. Confirm actual Marker messages
+
+```bash
+timeout 120s ros2 topic echo /social_nav_diffusion/debug_action std_msgs/msg/String --once
+timeout 120s ros2 topic echo /social_nav_diffusion/debug_trajectory visualization_msgs/msg/Marker --once \
+  | grep -E "frame_id:|ns:|id:|type:|action:|points:|- x:|  y:" \
+  | head -60
+```
+
+### D. If publisher exists but no messages arrive
+
+- Check Terminal 9.
+- If it is waiting for `/cpr_j100_0001/platform/odom`, fix odom first.
+- Verify:
+
+```bash
+timeout 10s ros2 topic echo /cpr_j100_0001/platform/odom --once >/dev/null && echo PASS || echo FAIL
+timeout 10s ros2 topic echo /people --once >/dev/null && echo PASS || echo FAIL
+```
+
+- Restart Terminal 9 after odom and people are active.
+
+### E. If even a simple ROS publisher is invisible
+
+The ROS graph / DDS discovery is stale or broken. Run this CLI probe:
+
+```bash
+source /opt/ros/jazzy/setup.bash
+export ROS_DOMAIN_ID=0
+export ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
+unset ROS_LOCALHOST_ONLY
+unset RMW_IMPLEMENTATION
+unset ROS_DISCOVERY_SERVER
+unset FASTRTPS_DEFAULT_PROFILES_FILE
+unset CYCLONEDDS_URI
+unset FASTDDS_BUILTIN_TRANSPORTS
+
+ros2 daemon stop 2>/dev/null || true
+sleep 2
+
+ros2 topic pub -r 1 /social_nav_diffusion/cli_probe std_msgs/msg/String "{data: cli_probe}" \
+  > /tmp/cli_probe.log 2>&1 &
+
+echo "PUBPID=$!"
+sleep 5
+
+cat /tmp/cli_probe.log
+
+ros2 topic list --no-daemon | grep /social_nav_diffusion/cli_probe || echo "FAIL: topic not listed"
+timeout 10s ros2 topic echo /social_nav_diffusion/cli_probe std_msgs/msg/String --once || true
+```
+
+Interpretation:
+
+- If `cli_probe` is listed and echo receives data, ROS graph is healthy.
+- If `cli_probe` publishes but cannot be listed or echoed, restart the container.
+
+### F. Container restart recovery
+
+If the CLI probe fails, restart the container from Windows PowerShell:
+
+```powershell
+docker restart fc4c042f675c
+```
+
+After restart, do not start Gazebo/Nav2 immediately. First run the CLI probe again. Only continue with the normal launch order after the CLI probe passes.
 
 ---
 
