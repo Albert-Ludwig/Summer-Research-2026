@@ -153,7 +153,7 @@ rm -f run_hunav_cold_start.log
 
 ros2 launch hunav_gazebo_fortress_wrapper simulation_fortress.launch.py \
   environment_name:=office_no_sensors \
-  configuration_file:=office_random_3_agents.yaml \
+  configuration_file:=office_2_agents.yaml \
   robot_name:=cpr_j100_0001/robot \
   use_gazebo_obs:=false \
   use_navgoal_to_start:=false \

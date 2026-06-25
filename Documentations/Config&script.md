@@ -353,3 +353,78 @@ ros2 launch hunav_gazebo_fortress_wrapper simulation_fortress.launch.py \
   verbose:=false \
   2>&1 | tee run_hunav_cold_start.log
 ```
+
+## office_2_agents.yaml
+
+This YAML enables `agent1` and `agent2` in the office map.
+
+```yaml
+hunav_loader:
+  ros__parameters:
+    yaml_base_name: office_2_agents
+    simulator: Gazebo Fortress
+    map: office
+    publish_people: true
+    global_goals:
+      1:
+        x: -3.000
+        y: 1.500
+      2:
+        x: 3.000
+        y: 1.500
+      3:
+        x: 3.000
+        y: -1.500
+      4:
+        x: -3.000
+        y: -1.500
+    agents:
+      - agent1
+      - agent2
+    agent1:
+      id: 1
+      group_id: -1
+      skin: 4
+      max_vel: 0.45
+      radius: 0.4
+      goal_radius: 0.35
+      cyclic_goals: true
+      init_pose:
+        x: -3.000
+        y: 1.500
+        z: 1.250
+        h: 0.000
+      behavior:
+        type: Regular
+        configuration: 0
+        goal_force_factor: 2.0
+        obstacle_force_factor: 10.0
+        social_force_factor: 5.0
+        other_force_factor: 20.0
+      goals:
+        - 2
+        - 1
+    agent2:
+      id: 2
+      group_id: -1
+      skin: 3
+      max_vel: 0.45
+      radius: 0.4
+      goal_radius: 0.35
+      cyclic_goals: true
+      init_pose:
+        x: 3.000
+        y: -1.500
+        z: 1.250
+        h: 3.142
+      behavior:
+        type: Regular
+        configuration: 0
+        goal_force_factor: 2.0
+        obstacle_force_factor: 10.0
+        social_force_factor: 5.0
+        other_force_factor: 20.0
+      goals:
+        - 4
+        - 3
+```
