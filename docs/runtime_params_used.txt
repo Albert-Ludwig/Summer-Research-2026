@@ -1,0 +1,38 @@
+use_sim_time=true
+use_diffusion_policy=true
+control_mode=raw_eval
+
+enable_goal_stop=true
+enable_speed_clamp=true
+enable_near_goal_slowdown=false
+enable_heading_gate=false
+enable_heading_stop=false
+enable_heading_align_override=false
+enable_speed_gain=false
+enable_sign_conflict_guard=false
+
+robot_v_pref=1.0
+robot_radius=0.25
+human_radius=0.25
+sync_policy_warm_start_from_odom=true
+sync_prev_action_from_odom=true
+
+ignore_people_for_policy=true
+force_zero_humans=true
+ignore_map_for_policy=true
+
+cmd_publish_period_sec=0.1
+diffusion_inference_period_sec=0.25
+command_hold_timeout_sec=1.0
+
+max_linear_speed=0.4
+max_angular_speed=0.8
+goal_tolerance=0.35
+goal_timeout_sec=60.0
+stop_when_goal_reached=true
+
+ActionRot conversion currently used:
+linear.x = ActionRot.v
+angular.z = ActionRot.r / policy.time_step
+
+With policy.time_step=0.25.

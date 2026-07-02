@@ -1,0 +1,5 @@
+checkpoint: /workspace/SocialNavDiffusion_Inference/SocialGuidedNavPlanner.pt
+norm stats: /workspace/SocialNavDiffusion_Inference/norm_stats_SOCIAL_NORMS8.npy
+SND_ROOT: /workspace/SocialNavDiffusion_Inference
+
+Note: checkpoint and norm stats are listed for audit reference only; checkpoint was not copied.

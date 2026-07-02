@@ -1,0 +1,27 @@
+policy_cmd_vel_node:
+  ros__parameters:
+    control_mode: guarded_eval
+    enable_goal_stop: true
+    enable_speed_clamp: true
+    enable_near_goal_slowdown: false
+    enable_heading_gate: false
+    enable_heading_stop: false
+    enable_heading_align_override: false
+    enable_speed_gain: false
+    enable_sign_conflict_guard: true
+    sign_conflict_heading_error_rad: 0.35
+    sign_conflict_min_raw_angular: 0.10
+    sign_conflict_linear_scale: 0.0
+    sign_conflict_align_kp: 0.6
+    sign_conflict_min_abs_w: 0.08
+    sign_conflict_max_abs_w: 0.8
+    max_linear_speed: 0.4
+    max_angular_speed: 0.8
+    goal_tolerance: 0.35
+    goal_timeout_sec: 60.0
+    stop_when_goal_reached: true
+    robot_v_pref: 1.0
+    robot_radius: 0.25
+    human_radius: 0.25
+    sync_policy_warm_start_from_odom: true
+    sync_prev_action_from_odom: true

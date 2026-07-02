@@ -1,0 +1,12 @@
+build/
+install/
+log/
+__pycache__/
+*.pyc
+*.bag
+*.db3
+*.tar.gz
+*.pt
+*.pth
+*.npy
+*.onnx
