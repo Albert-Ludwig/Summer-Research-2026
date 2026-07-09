@@ -30,6 +30,7 @@ import torch.nn.functional as F
 
 import sys
 import os
+import contextlib
 sys.path.append("/home/cschaibl/projects/aip-sl2smith/cschaibl/diffusion_planning")
 
 from diffusers_unet_1d_condition import UNet1DConditionModel
@@ -348,8 +349,8 @@ def smoothness_penalty(x_trajs_denorm):
 
 def goal_progress_reward(x_trajs_denorm, goal, goal_mean, goal_std):
     device = x_trajs_denorm.device
-    goal_mean_t = torch.tensor(goal_mean[0:2], dtype=torch.float32, device=device)
-    goal_std_t  = torch.tensor(goal_std[0:2],  dtype=torch.float32, device=device)
+    goal_mean_t = torch.as_tensor(goal_mean[0:2], dtype=torch.float32, device=device)
+    goal_std_t  = torch.as_tensor(goal_std[0:2],  dtype=torch.float32, device=device)
     goal_xy = (goal[:, 0:2] * goal_std_t + goal_mean_t)
     goal_xy = goal_xy.unsqueeze(1).unsqueeze(3)
     traj_xy       = x_trajs_denorm[:, :, 0:2, :]
@@ -380,10 +381,10 @@ def score_trajectories(x_trajs, obstacles, obs_mask, goal, norm,
     rewards  : (B, K)
     best_idx : (B,)
     """
-    traj_std  = torch.tensor(norm["traj_std"], dtype=torch.float32, device=x_trajs.device)
-    traj_mean = torch.tensor(norm["traj_mean"], dtype=torch.float32, device=x_trajs.device)
-    obs_std   = torch.tensor(norm["obs_std"],  dtype=torch.float32, device=x_trajs.device)
-    obs_mean  = torch.tensor(norm["obs_mean"], dtype=torch.float32, device=x_trajs.device)
+    traj_std  = torch.as_tensor(norm["traj_std"], dtype=torch.float32, device=x_trajs.device)
+    traj_mean = torch.as_tensor(norm["traj_mean"], dtype=torch.float32, device=x_trajs.device)
+    obs_std   = torch.as_tensor(norm["obs_std"],  dtype=torch.float32, device=x_trajs.device)
+    obs_mean  = torch.as_tensor(norm["obs_mean"], dtype=torch.float32, device=x_trajs.device)
     obs_denorm = obstacles * obs_std + obs_mean
 
     x_denorm = x_trajs * traj_std.view(1, 1, -1, 1) + traj_mean.view(1, 1, -1, 1)
@@ -518,6 +519,16 @@ class DiffusionConditionalUNet1DCFG(Policy):
         self.cfg_w_style = 1.0
         # ─────────────────────────────────────────────────────────────────
 
+        # ── AMP ──────────────────────────────────────────────────────────
+        # Optional bf16 autocast around the UNet forward pass in the
+        # denoising loop. Off by default; set use_amp = true under
+        # [diffusion_conditional_unet1dcfg] to enable. Kept as a flag
+        # (rather than always-on) so it can be A/B compared for timing
+        # impact without touching the eager/fp32 numerics otherwise.
+        self.use_amp = False
+        self.amp_dtype = torch.bfloat16
+        # ─────────────────────────────────────────────────────────────────
+
     def configure(self, config):
         import torch
         import numpy as np
@@ -568,12 +579,44 @@ class DiffusionConditionalUNet1DCFG(Policy):
                         if config.has_option('diffusion_conditional_unet1dcfg', 'map_extent')
                         else 10)
 
+        # ── AMP ──────────────────────────────────────────────────────────
+        self.use_amp = (config.getboolean('diffusion_conditional_unet1dcfg', 'use_amp')
+                        if config.has_option('diffusion_conditional_unet1dcfg', 'use_amp')
+                        else False)
+        amp_dtype_str = (config.get('diffusion_conditional_unet1dcfg', 'amp_dtype')
+                        if config.has_option('diffusion_conditional_unet1dcfg', 'amp_dtype')
+                        else 'bfloat16')
+        _amp_dtype_map = {'bfloat16': torch.bfloat16, 'bf16': torch.bfloat16,
+                          'float16': torch.float16, 'fp16': torch.float16}
+        assert amp_dtype_str in _amp_dtype_map, (
+            f"amp_dtype must be one of {list(_amp_dtype_map)}, got {amp_dtype_str!r}"
+        )
+        self.amp_dtype = _amp_dtype_map[amp_dtype_str]
+        # ─────────────────────────────────────────────────────────────────
+
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.device = device
         print("Device:", device)
 
+        # Fixed-shape 1D convs run every tick with identical sizes — let
+        # cuDNN autotune the fastest algorithm once instead of using the
+        # default heuristic every call. Same math, same precision, just
+        # picks a faster kernel implementation.
+        if device.type == "cuda":
+            torch.backends.cudnn.benchmark = True
+
         norm_file = config.get('diffusion_conditional_unet1dcfg', 'norm_file')
         self.norm = np.load(norm_file, allow_pickle=True).item()
+
+        # Cached GPU tensor copies of self.norm for the hot (per-tick)
+        # math path, so predict()/score_trajectories() don't rebuild +
+        # re-transfer these from numpy on every call. self.norm itself is
+        # left untouched (still numpy) since build_condition_from_state()
+        # relies on plain numpy arithmetic.
+        self.norm_t = {
+            k: torch.as_tensor(v, dtype=torch.float32, device=self.device)
+            for k, v in self.norm.items()
+        }
 
         self.traj_dim = 2
 
@@ -682,6 +725,36 @@ class DiffusionConditionalUNet1DCFG(Policy):
         self.model.eval()
         self.token_embedder.eval()
         self.style_embedder.eval()
+
+        print(f"AMP autocast for UNet forward: "
+              f"{'enabled (' + str(self.amp_dtype) + ')' if self.use_amp else 'disabled'}")
+
+        # Fuse Q/K/V projection weights for attention layers (self-attn:
+        # fuse all 3; cross-attn: fuse K+V since both read encoder_hidden_states).
+        # Concatenates the already-trained weight matrices into one combined
+        # matmul — identical outputs, fewer kernel launches. This model's
+        # cross-attn blocks (CrossAttnDownBlock1D/UpBlock1D, the mid block)
+        # dominate its structure, so this directly targets the per-step cost.
+        # HuggingFace marks this API "experimental"; it self-guards by raising
+        # ValueError for architectures it can't safely fuse (e.g. added-KV
+        # projections), so a failure here is loud, not silent.
+        try:
+            self.model.fuse_qkv_projections()
+            print("Fused QKV projections enabled for UNet attention layers")
+        except Exception as e:
+            print(f"fuse_qkv_projections unavailable, leaving attention unfused: {e}")
+
+        # Compile the UNet forward pass — same graph, fused CUDA kernels.
+        # predict() calls self.model with identical tensor shapes every
+        # step (N_V*K, traj_dim, horizon), so this specializes once and
+        # is reused for the rest of the run. Falls back to eager mode if
+        # compilation isn't supported on this torch/CUDA build, so a
+        # compile failure can never break inference.
+        try:
+            self.model = torch.compile(self.model, mode="reduce-overhead")
+            print("torch.compile enabled for UNet (mode=reduce-overhead)")
+        except Exception as e:
+            print(f"torch.compile unavailable, falling back to eager UNet: {e}")
 
         # ── PROJECTION ──────────────────────────────────────────────────
         # Optional config knobs (with defaults) — add these to your config
@@ -1366,14 +1439,18 @@ class DiffusionConditionalUNet1DCFG(Policy):
                             .expand(-1, K, -1)
                             .contiguous()
                             .reshape(N_V * K, attn_mask_v.shape[1]))
+            # attn_mask_6k never changes across the denoising loop (it only
+            # depends on the scene, not on x or t) — cast to bool once here
+            # instead of every one of the 5 denoising steps.
+            attn_mask_6k_bool = attn_mask_6k.bool()
 
         denoise_mode = "DDIM" if self.ddim_inference else "DDPM"
         time1 = datetime.now()
 
-        traj_std  = torch.tensor(self.norm["traj_std"], dtype=torch.float32, device=x.device)
-        traj_mean = torch.tensor(self.norm["traj_mean"], dtype=torch.float32, device=x.device)
-        obs_std   = torch.tensor(self.norm["obs_std"],  dtype=torch.float32, device=x.device)
-        obs_mean  = torch.tensor(self.norm["obs_mean"], dtype=torch.float32, device=x.device)
+        traj_std  = self.norm_t["traj_std"]
+        traj_mean = self.norm_t["traj_mean"]
+        obs_std   = self.norm_t["obs_std"]
+        obs_mean  = self.norm_t["obs_mean"]
         obs_denorm = obstacles * obs_std + obs_mean
 
         if self.ddim_inference:
@@ -1383,7 +1460,10 @@ class DiffusionConditionalUNet1DCFG(Policy):
             timesteps = reversed(range(self.noise_scheduler.config.num_train_timesteps))
 
         for t in timesteps:
-            t_tensor = torch.full((K,), t, device=self.device, dtype=torch.long)
+            # Single (N_V*K,)-shaped fill, built directly instead of a
+            # (K,) tensor + .repeat(N_V) (same broadcasted values, one
+            # allocation instead of two).
+            timestep_6k = torch.full((N_V * K,), t, device=self.device, dtype=torch.long)
 
             with torch.no_grad():
                 # Expand x across N_V variants: [N_V*K, D, T]
@@ -1392,12 +1472,24 @@ class DiffusionConditionalUNet1DCFG(Policy):
                          .contiguous()
                          .reshape(N_V * K, self.traj_dim, self.horizon))
 
-                noise_6k = self.model(
-                    sample                 = x_6k,
-                    timestep               = t_tensor.repeat(N_V),
-                    encoder_hidden_states  = tokens_6k,
-                    encoder_attention_mask = attn_mask_6k.bool(),
-                ).sample                                              # [N_V*K, D, T]
+                # Optional bf16/fp16 autocast around the UNet forward only
+                # (config flag `use_amp`). Everything before/after this
+                # call — CFG combination, scheduler.step, scoring — stays
+                # in fp32, so amp only affects the one op we expect to
+                # actually benefit from Tensor Core throughput.
+                amp_ctx = (
+                    torch.autocast(device_type="cuda", dtype=self.amp_dtype)
+                    if (self.use_amp and self.device.type == "cuda")
+                    else contextlib.nullcontext()
+                )
+                with amp_ctx:
+                    noise_6k = self.model(
+                        sample                 = x_6k,
+                        timestep               = timestep_6k,
+                        encoder_hidden_states  = tokens_6k,
+                        encoder_attention_mask = attn_mask_6k_bool,
+                    ).sample                                          # [N_V*K, D, T]
+                noise_6k = noise_6k.float()
 
                 noise_v    = noise_6k.view(N_V, K, self.traj_dim, self.horizon)
                 eps_uncond = noise_v[0]       # [K, D, T]  full null
@@ -1427,10 +1519,10 @@ class DiffusionConditionalUNet1DCFG(Policy):
                 with torch.no_grad():
                     print(f"t={t}  cost={cost.item():.4f}  grad_norm={grad.norm().item():.4f}", flush=True)
                     x = x - self.guidance_scale * grad
-                    x = self.noise_scheduler.step(noise_pred, t_tensor[0], x).prev_sample
+                    x = self.noise_scheduler.step(noise_pred, t, x).prev_sample
             else:
                 with torch.no_grad():
-                    x = self.noise_scheduler.step(noise_pred, t_tensor[0], x).prev_sample
+                    x = self.noise_scheduler.step(noise_pred, t, x).prev_sample
 
         with torch.no_grad():
             time2 = datetime.now()
@@ -1456,7 +1548,7 @@ class DiffusionConditionalUNet1DCFG(Policy):
                     )
 
             rewards, best_idx = score_trajectories(
-                x_scored, obs_b, mask_b, goal_b, self.norm,
+                x_scored, obs_b, mask_b, goal_b, self.norm_t,
                 collision_coef      = self.collision_coef,
                 smooth_pen_coef     = self.smooth_pen_coef,
                 goal_reward_coef    = self.goal_reward_coef,
