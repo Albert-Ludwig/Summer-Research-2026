@@ -500,6 +500,7 @@ ros2 topic info /social_nav_diffusion/debug_trajectory --verbose
 ```
 
 Expected:
+
 - `social_nav_diffusion_node` appears as a SUBSCRIPTION under `/people`.
 - `social_nav_diffusion_node` appears as a SUBSCRIPTION under `/cpr_j100_0001/platform/odom`.
 - `/social_nav_diffusion/debug_action` has Publisher count: 1.
@@ -574,6 +575,7 @@ Add:
 ```
 
 Marker settings:
+
 - Display type: `Marker`, not `MarkerArray`.
 - Topic: `/social_nav_diffusion/debug_trajectory`.
 - If the topic does not appear in the dropdown, manually type it.
@@ -759,6 +761,7 @@ ros2 topic info /social_nav_diffusion/debug_trajectory --verbose
 ```
 
 Expected:
+
 - `social_nav_diffusion_node` subscribes to `/people`.
 - `social_nav_diffusion_node` subscribes to `/cpr_j100_0001/platform/odom`.
 - `debug_action` Publisher count: 1.
