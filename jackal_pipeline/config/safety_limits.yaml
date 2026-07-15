@@ -1,0 +1,17 @@
+policy_cmd_vel_node:
+  ros__parameters:
+    control_mode: onboard_debug
+    cmd_vel_topic: /debug_cmd_vel
+    enable_goal_stop: true
+    enable_speed_clamp: true
+    max_linear_speed: 0.05
+    max_angular_speed: 0.1
+    goal_tolerance: 0.35
+    stop_when_goal_reached: true
+    disable_policy_command_publish: false
+
+safety:
+  ros__parameters:
+    max_linear_x: 0.05
+    max_angular_z: 0.1
+    publish_to_real_cmd_vel: false
