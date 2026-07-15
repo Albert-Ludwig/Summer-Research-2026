@@ -12,10 +12,9 @@ Useful options:
   python3 run_final_social_nav_test.py --skip-cleanup
 
 This starts HuNav/Gazebo, clock bridge, Jackal spawn, TF repair, SLAM,
-policy_cmd_vel_node, nav2_goal_to_pose_bridge, and optionally RViz.
-It also runs the documented pre-checks, sends a default goal, validates
-cmd_vel/debug topics, and checks odom movement.
-It does NOT start Nav2.
+the policy launch (including nav2_goal_to_pose_bridge), and optionally RViz.
+It runs the required topic/TF pre-checks and does not send an automatic goal.
+It does not start Nav2.
 """
 
 from __future__ import annotations
@@ -112,39 +111,24 @@ timeout {timeout}s ros2 topic echo {topic} {msg_type} --once >/dev/null
     return ok
 
 
-def check_namespaced_tf() -> None:
+def check_namespaced_tf() -> bool:
     cmd = f"""
 {COMMON}
 {ROS_ENV}
-echo '===== namespaced TF: map -> base_link ====='
 timeout 8s ros2 run tf2_ros tf2_echo map base_link \
   --ros-args \
   -r /tf:=/cpr_j100_0001/tf \
   -r /tf_static:=/cpr_j100_0001/tf_static
 """
-    print(sh(cmd).stdout)
+    result = sh(cmd)
+    ok = "Translation:" in result.stdout and "Rotation:" in result.stdout
+    print(f"[check] TF map -> base_link: {'PASS' if ok else 'FAIL'}")
+    if not ok and result.stdout.strip():
+        lines = result.stdout.strip().splitlines()
+        print("\n".join(lines[-8:]))
+    return ok
 
 
-def print_state() -> None:
-    cmd = f"""
-{COMMON}
-{ROS_ENV}
-echo '===== nodes ====='
-ros2 node list | grep -Ei 'policy|goal|bridge|navigate' || true
-
-echo '===== actions ====='
-ros2 action list | grep navigate || true
-
-echo '===== /goal_pose ====='
-ros2 topic info /goal_pose --verbose || true
-
-echo '===== /cpr_j100_0001/cmd_vel ====='
-ros2 topic info /cpr_j100_0001/cmd_vel --verbose || true
-
-echo '===== /social_nav_diffusion/policy_debug ====='
-ros2 topic info /social_nav_diffusion/policy_debug --verbose || true
-"""
-    print(sh(cmd).stdout)
 
 
 def send_goal(x: float, y: float) -> None:
@@ -158,24 +142,8 @@ ros2 topic pub --once /goal_pose geometry_msgs/msg/PoseStamped \
     print(sh(cmd).stdout)
 
 
-def validate_once() -> None:
-    cmd = f"""
-{COMMON}
-{ROS_ENV}
-echo '===== policy_debug ====='
-timeout 20s ros2 topic echo /social_nav_diffusion/policy_debug --once --full-length || echo 'NO policy_debug'
-
-echo '===== policy cmd_vel ====='
-timeout 20s ros2 topic echo /cpr_j100_0001/cmd_vel --once || echo 'NO policy cmd_vel'
-
-echo '===== platform cmd_vel ====='
-timeout 20s ros2 topic echo /cpr_j100_0001/platform/cmd_vel --once || echo 'NO platform cmd_vel'
-"""
-    print(sh(cmd).stdout)
-
-
 def tail(log_dir: Path, names: Optional[List[str]] = None) -> None:
-    names = names or ["hunav_gazebo", "clock_bridge", "spawn_jackal", "tf_repair", "slam", "policy_wrapper", "goal_bridge", "rviz"]
+    names = names or ["hunav_gazebo", "clock_bridge", "spawn_jackal", "tf_repair", "slam", "policy_wrapper", "rviz"]
     print(f"\n[logs] tail in {log_dir}")
     for n in names:
         p = log_dir / f"{n}.log"
@@ -339,12 +307,6 @@ ros2 launch social_nav_diffusion_ros jackal_pipeline.launch.py \
   use_sim_time:=true \
   use_diffusion_policy:=true
 """,
-        "goal_bridge": f"""
-{COMMON}
-{ROS_ENV}
-ros2 run social_nav_diffusion_ros nav2_goal_to_pose_bridge --ros-args \
-  --params-file /home/ubuntu/waterloo_jackal_pipeline_repo/install/social_nav_diffusion_ros/share/social_nav_diffusion_ros/config/topics_sim.yaml
-""",
         "rviz": f"""
 {COMMON}
 {ROS_ENV}
@@ -405,16 +367,12 @@ def main() -> int:
         check_namespaced_tf()
 
         procs.append(start("policy_wrapper", cmds["policy_wrapper"], log_dir)); wait("policy wrapper", 20)
-        procs.append(start("goal_bridge", cmds["goal_bridge"], log_dir)); wait("goal bridge", 4)
         if not args.no_rviz:
             procs.append(start("rviz", cmds["rviz"], log_dir)); wait("RViz", 5)
-
-        print_state()
 
         if args.goal is not None and not args.no_goal:
             send_goal(args.goal[0], args.goal[1])
             wait("policy response", 8)
-            validate_once()
 
         print("\n[ready] Stack is running.")
         if args.goal is not None and not args.no_goal:
@@ -435,7 +393,7 @@ def main() -> int:
             time.sleep(5)
     finally:
         stop_all(procs)
-        tail(log_dir)
+        print(f"[logs] saved in {log_dir}")
     return 0
 
 
