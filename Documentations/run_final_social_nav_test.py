@@ -174,18 +174,6 @@ timeout 20s ros2 topic echo /cpr_j100_0001/platform/cmd_vel --once || echo 'NO p
     print(sh(cmd).stdout)
 
 
-def check_odom_movement(seconds: int = 15) -> None:
-    cmd = f"""
-{COMMON}
-{ROS_ENV}
-echo '===== odom movement sample ====='
-timeout {seconds}s ros2 topic echo /cpr_j100_0001/platform/odom/filtered \
-  | grep -E "position:|orientation:|x:|y:|z:|w:" \
-  | head -120
-"""
-    print(sh(cmd).stdout)
-
-
 def tail(log_dir: Path, names: Optional[List[str]] = None) -> None:
     names = names or ["hunav_gazebo", "clock_bridge", "spawn_jackal", "tf_repair", "slam", "policy_wrapper", "goal_bridge", "rviz"]
     print(f"\n[logs] tail in {log_dir}")
@@ -346,7 +334,7 @@ ros2 launch clearpath_nav2_demos slam.launch.py \
 {ROS_ENV}
 export SOCIAL_NAV_DIFFUSION_USE_VENV=true
 ros2 launch social_nav_diffusion_ros jackal_pipeline.launch.py \
-  params_file:=/home/ubuntu/waterloo_jackal_pipeline_repo/install/social_nav_diffusion_ros/share/social_nav_diffusion_ros/config/raw_eval.yaml \
+  params_file:=/home/ubuntu/waterloo_jackal_pipeline_repo/install/social_nav_diffusion_ros/share/social_nav_diffusion_ros/config/angular_half_eval.yaml \
   topics_file:=/home/ubuntu/waterloo_jackal_pipeline_repo/install/social_nav_diffusion_ros/share/social_nav_diffusion_ros/config/topics_sim.yaml \
   use_sim_time:=true \
   use_diffusion_policy:=true
@@ -420,7 +408,6 @@ def main() -> int:
             send_goal(args.goal[0], args.goal[1])
             wait("policy response", 8)
             validate_once()
-            check_odom_movement()
 
         print("\n[ready] Stack is running.")
         if args.no_goal:
