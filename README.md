@@ -28,23 +28,3 @@ This is the repositry made by Christian Schaible, who is a PhD student at the Un
 
 This is the project that I worked on during my fellowship, and it is a continuation of the work done by Christian Schaible. The original repository can be found at
 https://github.com/schaiblc/SocialNavDiffusion_Inference.git
-
-## Repository Layout
-
-```text
-SocialNavDiffusion_Inference/  # diffusion model and original evaluation code
-jackal_pipeline/               # ROS 2 Jazzy wrapper and Jackal integration
-```
-
-The ROS wrapper, launch files, HuNav scenario, debug tools, and setup steps are in
-[`jackal_pipeline/README.md`](jackal_pipeline/README.md).
-
-Build the wrapper from the repository root with:
-
-```bash
-source /opt/ros/jazzy/setup.bash
-colcon build --symlink-install \
-  --base-paths jackal_pipeline \
-  --packages-select social_nav_diffusion_ros
-source install/setup.bash
-```
