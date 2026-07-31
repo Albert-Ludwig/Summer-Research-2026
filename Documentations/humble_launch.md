@@ -21,7 +21,13 @@ Active file inside the container:
 /home/ubuntu/waterloo_jackal_pipeline_repo/run_final_social_nav_test_humble.py
 ```
 
-Windows migration copy:
+Windows main copy:
+
+```text
+C:\Users\Administrator\Documents\Summer Research 2026\Documentations\run_final_social_nav_test_humble.py
+```
+
+Migration/audit backup:
 
 ```text
 C:\Users\Administrator\Documents\Summer Research 2026\Humble_Migration_20260729\pipeline_source\run_final_social_nav_test_humble.py
