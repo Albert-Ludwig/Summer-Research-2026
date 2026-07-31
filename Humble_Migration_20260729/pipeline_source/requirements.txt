@@ -1,0 +1,36 @@
+# Pinned SocialNavDiffusion inference dependencies validated on this setup.
+# Use this to rebuild /workspace/SocialNavDiffusion_Inference/.venv.
+#
+# Install local editable packages separately after this file:
+#   export ACADOS_SOURCE_DIR=/home/ubuntu/acados
+#   python -m pip install -e "$ACADOS_SOURCE_DIR/interfaces/acados_template"
+#   python -m pip install -e /workspace/SocialNavDiffusion_Inference
+
+casadi==3.7.2
+click==8.4.1
+cloudpickle==3.1.2
+Cython==3.2.5
+diffusers==0.38.0
+filelock==3.29.4
+fsspec==2026.6.0
+GitPython==3.1.50
+gym==0.26.2
+gym-notices==0.1.0
+Jinja2==3.1.6
+matplotlib==3.11.0
+networkx==3.6.1
+numpy==1.26.4
+packaging==26.2
+pillow==12.2.0
+protobuf==7.35.1
+pyrvo2==0.0.0
+PyYAML==6.0.3
+requests==2.34.2
+safetensors==0.8.0
+scipy==1.17.1
+sympy==1.14.0
+torch==2.12.1
+torchvision==0.27.1
+torchviz==0.0.3
+tqdm==4.68.3
+wandb==0.27.2

@@ -1,0 +1,24 @@
+# Python and local virtual environments
+__pycache__/
+*.py[cod]
+.venv/
+
+# ROS and native build outputs
+build/
+install/
+log/
+CMakeFiles/
+*.o
+*.so
+
+# Model artifacts and runtime logs
+*.pt
+*.pth
+*.onnx
+*.log
+
+# Rebuildable third-party migration copies kept only on this workstation
+/Humble_Migration_20260729/acados_source/
+/Humble_Migration_20260729/clearpath_gz_jazzy_package/
+/Humble_Migration_20260729/clearpath_jazzy_world_assets/
+/Humble_Migration_20260729/hunav_ws_src/
