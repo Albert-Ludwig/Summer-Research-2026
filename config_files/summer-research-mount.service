@@ -1,0 +1,12 @@
+[Unit]
+Description=Bind mount the Summer Research workspace for native WSL Docker
+After=local-fs.target
+Wants=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/mount-summer-research
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

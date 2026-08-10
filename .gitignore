@@ -10,6 +10,8 @@ log/
 CMakeFiles/
 *.o
 *.so
+/c_generated_proj/
+/acados_proj_ocp.json
 
 # Model artifacts and runtime logs
 *.pt

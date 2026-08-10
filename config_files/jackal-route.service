@@ -1,0 +1,12 @@
+[Unit]
+Description=Select the direct Jackal Ethernet source address
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/ip route replace 192.168.131.0/24 dev eth0 src 192.168.131.101 metric 1
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

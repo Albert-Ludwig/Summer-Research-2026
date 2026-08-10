@@ -5,6 +5,8 @@ numpy
 scipy
 torch
 torchvision
+ultralytics==8.4.104
+opencv-python<4.12
 diffusers
 casadi
 rvo2

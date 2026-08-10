@@ -1,21 +1,22 @@
 policy_cmd_vel_node:
   ros__parameters:
     people_topic: /people
-    odom_topic: /jackal1/platform/odom  # TODO: confirm on robot
-    map_topic: /map  # TODO: confirm or disable static map on robot
+    ignore_people_for_policy: true
+    odom_topic: /jackal1/platform/odom/filtered
+    map_topic: /map
     goal_topic: /goal_pose
     robot_goal_topic: /jackal1/goal_pose
     cmd_vel_topic: /debug_cmd_vel
     active_goal_marker_topic: /social_nav_diffusion/active_goal_marker
     goal_path_topic: /social_nav_diffusion/goal_path
     policy_debug_topic: /social_nav_diffusion/policy_debug
-    cmd_frame_id: base_link  # TODO: confirm frame
-    target_policy_frame: map  # TODO: confirm frame
-    people_frame: map  # TODO: confirm frame or disable people input
+    cmd_frame_id: base_link
+    target_policy_frame: map
+    people_frame: map
 
 nav2_goal_to_pose_bridge:
   ros__parameters:
-    robot_odom_topic: /jackal1/platform/odom  # TODO: confirm on robot
+    robot_odom_topic: /jackal1/platform/odom/filtered
     goal_topic: /goal_pose
     robot_goal_topic: /jackal1/goal_pose
     active_goal_marker_topic: /social_nav_diffusion/active_goal_marker
@@ -24,10 +25,10 @@ nav2_goal_to_pose_bridge:
 
 jackal1_topic_checklist:
   ros__parameters:
-    lidar_topic: "<confirm_with_ros2_topic_list>"
-    odom_topic: "<confirm_with_ros2_topic_list>"
-    imu_topic: "<confirm_with_ros2_topic_list>"
-    real_cmd_vel_topic: "<confirm_only_after_training_and_safety_review>"
-    tf_base_frame: "<confirm_base_frame>"
-    tf_odom_frame: "<confirm_odom_frame>"
-    tf_map_frame: "<confirm_map_frame>"
+    lidar_topic: /jackal1/sensors/lidar3d_0/scan
+    odom_topic: /jackal1/platform/odom/filtered
+    imu_topic: /jackal1/sensors/imu_0/data
+    real_cmd_vel_topic: /jackal1/cmd_vel
+    tf_base_frame: base_link
+    tf_odom_frame: odom
+    tf_map_frame: map

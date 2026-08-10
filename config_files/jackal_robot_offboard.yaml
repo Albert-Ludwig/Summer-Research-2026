@@ -1,0 +1,80 @@
+serial_number: j100-0304
+version: 0
+system:
+  hosts:
+    - hostname: jackal1
+      ip: 192.168.131.1
+  ros2:
+    namespace: jackal1
+    domain_id: 0
+    middleware:
+      implementation: rmw_fastrtps_cpp
+      discovery: server
+      servers:
+        - hostname: jackal1
+
+platform:
+  attachments:
+    - name: front_fender
+      type: j100.fender
+    - name: rear_fender
+      type: j100.fender
+      rpy: [0.0, 0.0, 3.1415]
+  controller: ps4
+  extras:
+    ros_parameters:
+      twist_mux:
+        locks:
+          joy_stop.topic: platform/joy_stop
+          joy_stop.timeout: 0.0
+          joy_stop.priority: 254
+
+sensors:
+  lidar3d:
+    - model: velodyne_lidar
+      urdf_enabled: true
+      launch_enabled: true
+      parent: base_link
+      xyz: [0.12, 0.0, 0.1603]
+      rpy: [0.0, 0.0, 0.0]
+      ros_parameters:
+        velodyne_driver_node:
+          frame_id: lidar3d_0_laser
+          device_ip: 192.168.131.20
+          port: 2368
+          model: VLP16
+        velodyne_transform_node:
+          model: VLP16
+          fixed_frame: lidar3d_0_laser
+          target_frame: lidar3d_0_laser
+          min_range: 0.1
+
+  imu:
+    - model: redshift_um7
+      urdf_enabled: true
+      launch_enabled: true
+      parent: base_link
+      xyz: [-0.12, 0.0, 0.005]
+      rpy: [3.14159, 0.0, -1.570796]
+      ros_parameters:
+        um7_driver:
+          port: /dev/ttyUSB0
+          frame_id: imu_1_link
+          tf_ned_to_enu: true
+
+  camera:
+    - model: intel_realsense
+      urdf_enabled: true
+      launch_enabled: true
+      parent: base_link
+      xyz: [0.0, 0.0, 0.0]
+      rpy: [0.0, 0.0, 0.0]
+      ros_parameters:
+        intel_realsense:
+          camera_name: camera_0
+          device_type: d435
+          serial_no: "825312072012"
+          enable_color: true
+          rgb_camera.color_profile: 640,480,30
+          enable_depth: false
+          pointcloud.enable: false

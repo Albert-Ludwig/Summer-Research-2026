@@ -1,0 +1,24 @@
+rgbd_people_detector:
+  ros__parameters:
+    color_topic: /jackal1/sensors/camera_0/color/image
+    depth_topic: /jackal1/sensors/camera_0/aligned_depth_to_color/image
+    camera_info_topic: /jackal1/sensors/camera_0/aligned_depth_to_color/camera_info
+    people_topic: /people
+    marker_topic: /people_detector/markers
+    status_topic: /people_detector/status
+    target_frame: map
+    detector_backend: ultralytics_yolo
+    yolo_model: /workspace/SocialNavDiffusion_Inference/yolo11n.pt
+    yolo_image_size: 640
+    score_threshold: 0.45
+    inference_period_sec: 0.20
+    max_sync_delta_sec: 0.20
+    depth_scale: 0.001
+    min_depth_m: 0.30
+    max_depth_m: 12.0
+    min_valid_depth_pixels: 20
+    max_people: 10
+    association_distance_m: 1.0
+    track_timeout_sec: 0.75
+    velocity_smoothing: 0.50
+    tf_timeout_sec: 0.15

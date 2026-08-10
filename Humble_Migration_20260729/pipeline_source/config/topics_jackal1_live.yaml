@@ -1,11 +1,21 @@
 policy_cmd_vel_node:
   ros__parameters:
     people_topic: /people
-    odom_topic: /cpr_j100_0001/platform/odom/filtered
-    map_topic: /cpr_j100_0001/map
+    ignore_people_for_policy: false
+    require_people_stream: true
+    odom_topic: /jackal1/platform/odom/filtered
+    map_topic: /map
+    enable_live_lidar_to_policy: true
+    require_live_lidar_for_policy: true
+    lidar_topic: /jackal1/sensors/lidar3d_0/scan
+    lidar_timeout_sec: 0.4
+    lidar_min_range_m: 0.15
+    lidar_max_range_m: 6.0
+    lidar_voxel_size_m: 0.10
+    lidar_max_points: 1000
     goal_topic: /goal_pose
-    robot_goal_topic: /cpr_j100_0001/goal_pose
-    cmd_vel_topic: /cpr_j100_0001/cmd_vel_stamped
+    robot_goal_topic: /jackal1/goal_pose
+    cmd_vel_topic: /debug_cmd_vel
     active_goal_marker_topic: /social_nav_diffusion/active_goal_marker
     goal_path_topic: /social_nav_diffusion/goal_path
     projected_trajectory_topic: /social_nav_diffusion/projected_trajectory
@@ -17,9 +27,9 @@ policy_cmd_vel_node:
 
 nav2_goal_to_pose_bridge:
   ros__parameters:
-    robot_odom_topic: /cpr_j100_0001/platform/odom
+    robot_odom_topic: /jackal1/platform/odom/filtered
     goal_topic: /goal_pose
-    robot_goal_topic: /cpr_j100_0001/goal_pose
+    robot_goal_topic: /jackal1/goal_pose
     active_goal_marker_topic: /social_nav_diffusion/active_goal_marker
     navigate_to_pose_action: /navigate_to_pose
-    robot_navigate_to_pose_action: /cpr_j100_0001/navigate_to_pose
+    robot_navigate_to_pose_action: /jackal1/navigate_to_pose

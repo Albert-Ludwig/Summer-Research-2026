@@ -41,6 +41,14 @@ def goal_id_text(goal_handle) -> str:
     return ''.join(f'{byte:02x}' for byte in goal_id)
 
 
+def set_result_details(result, message: str = ''):
+    if hasattr(result, 'error_code'):
+        result.error_code = getattr(NavigateToPose.Result, 'NONE', 0)
+    if hasattr(result, 'error_msg'):
+        result.error_msg = message
+    return result
+
+
 def quaternion_to_yaw(q) -> float:
     siny_cosp = 2.0 * (q.w * q.z + q.x * q.y)
     cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
@@ -184,8 +192,7 @@ class Nav2GoalToPoseBridge(Node):
                 goal_handle.canceled()
                 active.done_event.set()
                 self.clear_active_goal(active)
-                result.error_code = NavigateToPose.Result.NONE
-                result.error_msg = 'Goal canceled'
+                set_result_details(result, 'Goal canceled')
                 self.get_logger().info(f'NavigateToPose goal canceled: {goal_id_text(goal_handle)}')
                 return result
 
@@ -202,8 +209,7 @@ class Nav2GoalToPoseBridge(Node):
                 goal_handle.succeed()
                 active.done_event.set()
                 self.clear_active_goal(active)
-                result.error_code = NavigateToPose.Result.NONE
-                result.error_msg = ''
+                set_result_details(result)
                 self.get_logger().info(
                     f'NavigateToPose goal reached: distance={distance:.3f} <= {self.goal_tolerance:.3f}, '
                     f'goal_distance_common_frame={self.last_goal_distance_common_frame:.3f}, '
@@ -218,14 +224,13 @@ class Nav2GoalToPoseBridge(Node):
                 goal_handle.abort()
                 active.done_event.set()
                 self.clear_active_goal(active)
-                result.error_code = NavigateToPose.Result.NONE
-                result.error_msg = f'Goal timed out after {elapsed:.1f}s'
-                self.get_logger().warn(result.error_msg)
+                message = f'Goal timed out after {elapsed:.1f}s'
+                set_result_details(result, message)
+                self.get_logger().warn(message)
                 return result
 
         self.clear_active_goal(active)
-        result.error_code = NavigateToPose.Result.NONE
-        result.error_msg = 'Bridge shutting down'
+        set_result_details(result, 'Bridge shutting down')
         return result
 
     def republish_callback(self):

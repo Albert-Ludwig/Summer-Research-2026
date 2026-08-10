@@ -7,6 +7,7 @@
 #   python -m pip install -e /workspace/SocialNavDiffusion_Inference
 
 casadi==3.7.2
+cffi==2.1.1
 click==8.4.1
 cloudpickle==3.1.2
 Cython==3.2.5
@@ -20,9 +21,14 @@ Jinja2==3.1.6
 matplotlib==3.11.0
 networkx==3.6.1
 numpy==1.26.4
+nvidia-ml-py==13.610.43
+opencv-python==4.11.0.86
 packaging==26.2
 pillow==12.2.0
+polars==1.43.2
+polars-runtime-32==1.43.2
 protobuf==7.35.1
+pycparser==3.0
 pyrvo2==0.0.0
 PyYAML==6.0.3
 requests==2.34.2
@@ -33,4 +39,6 @@ torch==2.12.1
 torchvision==0.27.1
 torchviz==0.0.3
 tqdm==4.68.3
+ultralytics==8.4.104
+ultralytics-thop==2.1.6
 wandb==0.27.2

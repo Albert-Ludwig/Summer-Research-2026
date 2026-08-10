@@ -24,7 +24,7 @@ policy_cmd_vel_node:
     sync_policy_warm_start_from_odom: false
     sync_prev_action_from_odom: false
     cmd_publish_period_sec: 0.1
-    diffusion_inference_period_sec: 0.1
+    diffusion_inference_period_sec: 0.25
     command_hold_timeout_sec: 1.0
     enable_projected_trajectory_sampling: true
     projected_trajectory_fallback_to_hold: true

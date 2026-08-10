@@ -40,7 +40,14 @@ def maybe_reexec_for_diffusion():
 
     env = os.environ.copy()
     env["ACADOS_SOURCE_DIR"] = "/home/ubuntu/acados"
-    env["LD_LIBRARY_PATH"] = env.get("LD_LIBRARY_PATH", "") + ":/home/ubuntu/acados/lib"
+    env["LD_LIBRARY_PATH"] = ":".join(
+        path
+        for path in (
+            "/home/ubuntu/acados/lib",
+            env.get("LD_LIBRARY_PATH", ""),
+        )
+        if path
+    )
     extra_pythonpath = [
         INFERENCE_REPO_DEFAULT,
         f"{INFERENCE_REPO_DEFAULT}/diffusers_unet_1d_condition",
@@ -60,7 +67,9 @@ from people_msgs.msg import People
 from rclpy.duration import Duration
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
 from rclpy.time import Time
+from sensor_msgs.msg import LaserScan
 from std_msgs.msg import String
 from tf2_ros import Buffer, TransformException, TransformListener
 from visualization_msgs.msg import Marker
@@ -68,6 +77,62 @@ from visualization_msgs.msg import Marker
 
 def clamp(value: float, lower: float, upper: float) -> float:
     return max(lower, min(upper, value))
+
+
+def voxelized_laser_points(
+    ranges,
+    angle_min: float,
+    angle_increment: float,
+    message_range_min: float,
+    message_range_max: float,
+    configured_range_min: float,
+    configured_range_max: float,
+    voxel_size: float,
+    max_points: int,
+) -> List[Tuple[float, float]]:
+    """Return bounded, nearest-first scan endpoints in the scan frame."""
+    lower = max(float(message_range_min), float(configured_range_min), 0.0)
+    upper_candidates = [float(configured_range_max)]
+    if math.isfinite(float(message_range_max)) and float(message_range_max) > 0.0:
+        upper_candidates.append(float(message_range_max))
+    upper = min(upper_candidates)
+    if upper <= lower or max_points <= 0:
+        return []
+
+    cell_size = max(float(voxel_size), 1e-3)
+    cells: Dict[Tuple[int, int], Tuple[float, float, float]] = {}
+    angle = float(angle_min)
+    increment = float(angle_increment)
+    for raw_range in ranges:
+        distance = float(raw_range)
+        if math.isfinite(distance) and lower <= distance <= upper:
+            x = distance * math.cos(angle)
+            y = distance * math.sin(angle)
+            key = (int(round(x / cell_size)), int(round(y / cell_size)))
+            previous = cells.get(key)
+            if previous is None or distance < previous[0]:
+                cells[key] = (distance, x, y)
+        angle += increment
+
+    nearest = sorted(cells.values(), key=lambda item: item[0])[:max_points]
+    return [(float(x), float(y)) for _, x, y in nearest]
+
+
+def combine_occupancy_points(static_points, live_points):
+    """Combine bounded live points with static occupancy without history."""
+    try:
+        import numpy as np
+
+        lidar_array = np.asarray(live_points, dtype=float).reshape((-1, 2))
+        if static_points is None or len(static_points) == 0:
+            return lidar_array
+        return np.concatenate(
+            (np.asarray(static_points, dtype=float).reshape((-1, 2)), lidar_array),
+            axis=0,
+        )
+    except ImportError:
+        static_list = list(static_points) if static_points is not None else []
+        return static_list + list(live_points)
 
 
 def wrap_angle(angle: float) -> float:
@@ -588,6 +653,7 @@ class PolicyCmdVelNode(Node):
         self.declare_parameter("debug_verbose_state", False)
         self.declare_parameter("debug_csv_path", "")
         self.declare_parameter("ignore_people_for_policy", False)
+        self.declare_parameter("require_people_stream", False)
         self.declare_parameter("ignore_map_for_policy", False)
         self.declare_parameter("force_zero_humans", False)
         self.declare_parameter("fixed_test_goal_in_robot_frame", False)
@@ -665,6 +731,17 @@ class PolicyCmdVelNode(Node):
         self.declare_parameter("occupied_threshold", 50)
         self.declare_parameter("max_static_map_cells", 20000)
         self.declare_parameter("treat_unknown_as_occupied", False)
+        self.declare_parameter("enable_live_lidar_to_policy", False)
+        self.declare_parameter("require_live_lidar_for_policy", False)
+        self.declare_parameter(
+            "lidar_topic",
+            "/jackal1/sensors/lidar3d_0/scan",
+        )
+        self.declare_parameter("lidar_timeout_sec", 0.4)
+        self.declare_parameter("lidar_min_range_m", 0.15)
+        self.declare_parameter("lidar_max_range_m", 6.0)
+        self.declare_parameter("lidar_voxel_size_m", 0.10)
+        self.declare_parameter("lidar_max_points", 1000)
         self.declare_parameter("reset_policy_state_on_new_goal", True)
         self.declare_parameter("reset_policy_state_on_goal_reached", True)
         self.declare_parameter("goal_duplicate_position_epsilon", 0.03)
@@ -699,6 +776,7 @@ class PolicyCmdVelNode(Node):
         self._last_source_log_time = 0.0
         self._last_hold_log_time = 0.0
         self._inference_lock = threading.Lock()
+        self._shutdown_event = threading.Event()
         self._latest_policy_cmd: Optional[Dict[str, float]] = None
         self._diffusion_thread: Optional[threading.Thread] = None
         self._diffusion_inference_running = False
@@ -722,18 +800,27 @@ class PolicyCmdVelNode(Node):
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
         self.target_policy_frame = str(self.get_parameter("target_policy_frame").value)
+        self.live_lidar_enabled = bool(
+            self.get_parameter("enable_live_lidar_to_policy").value
+        )
+        self.require_live_lidar = bool(
+            self.get_parameter("require_live_lidar_for_policy").value
+        )
+        self.lidar_topic = str(self.get_parameter("lidar_topic").value)
         self.last_frame_debug = {
             "latest_odom_header_frame_id": "",
             "latest_odom_child_frame_id": "",
             "latest_goal_header_frame_id": "",
             "latest_map_header_frame_id": "",
             "latest_people_header_frame_id": "",
+            "latest_lidar_header_frame_id": "",
             "people_frame_used": "",
             "target_policy_frame": self.target_policy_frame,
             "tf_robot_to_target_success": False,
             "tf_goal_to_target_success": False,
             "tf_people_to_target_success": False,
             "tf_map_to_target_success": False,
+            "tf_lidar_to_target_success": False,
             "tf_failure_reason": "",
         }
         self._logged_frame_ids = False
@@ -745,6 +832,11 @@ class PolicyCmdVelNode(Node):
         self._static_map_downsampled = False
         self._static_map_frame_id = ""
         self.last_static_map_has_map_value = 0.0
+        self._live_lidar_cache_stamp = None
+        self._live_lidar_points_cache: List[Tuple[float, float]] = []
+        self._fused_occupancy_cache_key = None
+        self._fused_occupancy_cache = None
+        self.last_live_lidar_points_used = 0
         self.last_policy_state_reset_on_new_goal = False
         self.last_policy_state_reset_on_goal_reached = False
         self.last_policy_state_after_reset = {}
@@ -796,6 +888,8 @@ class PolicyCmdVelNode(Node):
         self.latest_people_frame_id = ""
         self.latest_map: Optional[OccupancyGrid] = None
         self.latest_map_time: Optional[float] = None
+        self.latest_lidar_scan: Optional[LaserScan] = None
+        self.latest_lidar_time: Optional[float] = None
         self.latest_goal: Optional[PoseStamped] = None
         self.latest_goal_time: Optional[float] = None
         self.last_cmd = {"v": 0.0, "w": 0.0}
@@ -837,10 +931,22 @@ class PolicyCmdVelNode(Node):
         self.create_subscription(People, self.people_topic, self.people_callback, 10)
         self.create_subscription(Odometry, self.odom_topic, self.odom_callback, 20)
         self.create_subscription(OccupancyGrid, self.map_topic, self.map_callback, 1)
+        if self.live_lidar_enabled:
+            self.create_subscription(
+                LaserScan,
+                self.lidar_topic,
+                self.lidar_callback,
+                qos_profile_sensor_data,
+            )
         self.create_subscription(PoseStamped, self.goal_topic, self.goal_callback, 10)
         self.create_subscription(PoseStamped, self.robot_goal_topic, self.goal_callback, 10)
 
-        self.cmd_pub = self.create_publisher(TwistStamped, self.cmd_vel_topic, 10)
+        self.command_publish_disabled = bool(
+            self.get_parameter("disable_policy_command_publish").value
+        )
+        self.cmd_pub = None
+        if not self.command_publish_disabled:
+            self.cmd_pub = self.create_publisher(TwistStamped, self.cmd_vel_topic, 10)
         self.active_goal_marker_pub = self.create_publisher(Marker, self.active_goal_marker_topic, 10)
         self.goal_path_pub = self.create_publisher(Path, self.goal_path_topic, 10)
         self.projected_trajectory_pub = self.create_publisher(Path, self.projected_trajectory_topic, 10)
@@ -863,9 +969,15 @@ class PolicyCmdVelNode(Node):
             )
         else:
             mode = "placeholder"
+        if self.command_publish_disabled:
+            command_output = "command publication disabled; no cmd_vel publisher created"
+        else:
+            command_output = (
+                f"publishing TwistStamped to {self.cmd_vel_topic} "
+                f"every {self.cmd_publish_period:.3f}s"
+            )
         self.get_logger().info(
-            "policy_cmd_vel_node ready: "
-            f"mode={mode}, publishing TwistStamped to {self.cmd_vel_topic} every {self.cmd_publish_period:.3f}s"
+            f"policy_cmd_vel_node ready: mode={mode}, {command_output}"
         )
         if (
             self.use_diffusion_policy
@@ -926,8 +1038,14 @@ class PolicyCmdVelNode(Node):
         return float(getattr(self.diffusion_adapter.policy, "time_step", float("nan")))
 
     def start_policy_warmup(self):
+        if self._shutdown_event.is_set():
+            return
         with self._inference_lock:
-            if self._diffusion_inference_running or self.policy_warmup_started:
+            if (
+                self._shutdown_event.is_set()
+                or self._diffusion_inference_running
+                or self.policy_warmup_started
+            ):
                 return
             self._diffusion_inference_running = True
             self.policy_warmup_started = True
@@ -946,6 +1064,8 @@ class PolicyCmdVelNode(Node):
         self._diffusion_thread.start()
 
     def policy_warmup_watchdog_callback(self):
+        if self._shutdown_event.is_set():
+            return
         if not self.policy_warmup_started or self.policy_warmup_complete:
             return
         if self._policy_warmup_wall_start is None:
@@ -997,9 +1117,10 @@ class PolicyCmdVelNode(Node):
             success = True
         except Exception as exc:
             error = f"{type(exc).__name__}: {exc}"
-            self.get_logger().error(
-                f"Policy warm-up failed: {error}\n{traceback.format_exc()}"
-            )
+            if not self._shutdown_event.is_set():
+                self.get_logger().error(
+                    f"Policy warm-up failed: {error}\n{traceback.format_exc()}"
+                )
         finally:
             duration = time.perf_counter() - start_wall
             self.policy_warmup_duration_sec = duration
@@ -1011,10 +1132,10 @@ class PolicyCmdVelNode(Node):
                 success = False
                 cleanup_error = f"warm-up state reset failed: {type(exc).__name__}: {exc}"
                 error = f"{error}; {cleanup_error}" if error else cleanup_error
-                self.get_logger().error(cleanup_error)
+                if not self._shutdown_event.is_set():
+                    self.get_logger().error(cleanup_error)
 
             self.clear_latest_policy_cmd()
-            self.clear_trajectory_paths()
             self.last_cmd = {"v": 0.0, "w": 0.0}
             self.last_raw_cmd = {"v": 0.0, "w": 0.0}
             self.last_final_cmd = {"v": 0.0, "w": 0.0}
@@ -1023,13 +1144,19 @@ class PolicyCmdVelNode(Node):
             self.last_raw_model_v_before_conversion = float("nan")
             self.last_raw_model_r_or_w_before_conversion = float("nan")
             self.last_command_source = "no_goal"
-            self.publish_zero_cmd_preserve_model_debug()
+            if not self._shutdown_event.is_set():
+                self.clear_trajectory_paths()
+                self.publish_zero_cmd_preserve_model_debug()
 
             self.policy_warmup_complete = True
             self.policy_warmup_success = success
             self.policy_warmup_error = error
             with self._inference_lock:
                 self._diffusion_inference_running = False
+
+            if self._shutdown_event.is_set():
+                self.policy_ready_for_goal = False
+                return
 
             if success:
                 self.get_logger().info(f"Policy warm-up completed in {duration:.3f} s")
@@ -1044,6 +1171,40 @@ class PolicyCmdVelNode(Node):
                 self.get_logger().info("Policy ready for real goals")
             else:
                 self.policy_ready_for_goal = False
+
+    def prepare_for_shutdown(self, join_timeout_sec: float = 5.0):
+        self._shutdown_event.set()
+        self.policy_ready_for_goal = False
+
+        for timer_name in (
+            "cmd_timer",
+            "policy_debug_timer",
+            "diffusion_timer",
+            "policy_warmup_watchdog_timer",
+        ):
+            timer = getattr(self, timer_name, None)
+            if timer is not None:
+                timer.cancel()
+
+        with self._goal_lock:
+            self._goal_generation += 1
+            self.latest_goal = None
+            self.latest_goal_time = None
+            self._pending_goal_during_warmup = None
+            self._pending_goal_received_time = None
+
+        thread = self._diffusion_thread
+        if (
+            thread is not None
+            and thread.is_alive()
+            and thread is not threading.current_thread()
+        ):
+            thread.join(timeout=max(0.0, float(join_timeout_sec)))
+            if thread.is_alive() and rclpy.ok():
+                self.get_logger().warn(
+                    "Inference thread is still finishing after shutdown request; "
+                    "ROS publication is disabled for that thread"
+                )
 
     def tf_enabled(self) -> bool:
         return bool(self.get_parameter("enable_tf_transforms").value)
@@ -1149,6 +1310,16 @@ class PolicyCmdVelNode(Node):
     def map_callback(self, msg: OccupancyGrid):
         self.latest_map = msg
         self.latest_map_time = self.now_sec()
+        self._fused_occupancy_cache_key = None
+
+    def lidar_callback(self, msg: LaserScan):
+        self.latest_lidar_scan = msg
+        self.latest_lidar_time = self.now_sec()
+        self.last_frame_debug["latest_lidar_header_frame_id"] = (
+            msg.header.frame_id or ""
+        )
+        self._live_lidar_cache_stamp = None
+        self._fused_occupancy_cache_key = None
 
     def goal_position_delta(self, old_goal: PoseStamped, new_goal: PoseStamped) -> float:
         dx = float(new_goal.pose.position.x) - float(old_goal.pose.position.x)
@@ -1354,7 +1525,7 @@ class PolicyCmdVelNode(Node):
         self.last_heading_to_goal = float(goal["heading_to_goal"])
         self.last_heading_error = float(goal["heading_error"])
 
-    def build_occupancy_state(self) -> Optional[Dict]:
+    def _build_static_occupancy_state(self) -> Optional[Dict]:
         if self.latest_map is None or bool(self.get_parameter("ignore_map_for_policy").value):
             self.last_static_map_has_map_value = 0.0
             return None
@@ -1461,6 +1632,86 @@ class PolicyCmdVelNode(Node):
         self._static_map_cells_used = len(transformed)
         self._static_map_downsampled = downsampled
         self.last_static_map_has_map_value = 1.0 if transformed else 0.0
+        return occupancy
+
+    def build_live_lidar_points(self) -> List[Tuple[float, float]]:
+        if not self.live_lidar_enabled or self.latest_lidar_scan is None:
+            self.last_live_lidar_points_used = 0
+            return []
+
+        msg = self.latest_lidar_scan
+        stamp = (
+            int(msg.header.stamp.sec),
+            int(msg.header.stamp.nanosec),
+            msg.header.frame_id or "",
+            len(msg.ranges),
+        )
+        if self._live_lidar_cache_stamp == stamp:
+            return self._live_lidar_points_cache
+
+        local_points = voxelized_laser_points(
+            msg.ranges,
+            msg.angle_min,
+            msg.angle_increment,
+            msg.range_min,
+            msg.range_max,
+            float(self.get_parameter("lidar_min_range_m").value),
+            float(self.get_parameter("lidar_max_range_m").value),
+            float(self.get_parameter("lidar_voxel_size_m").value),
+            max(1, int(self.get_parameter("lidar_max_points").value)),
+        )
+        source_frame = msg.header.frame_id or self.target_policy_frame
+        transform = self.lookup_transform_to_target(
+            source_frame,
+            "tf_lidar_to_target_success",
+        )
+        if transform is None:
+            transformed = local_points
+        else:
+            transformed = [
+                apply_transform_xy(x, y, transform)
+                for x, y in local_points
+            ]
+
+        self._live_lidar_points_cache = [
+            (float(x), float(y)) for x, y in transformed
+        ]
+        self._live_lidar_cache_stamp = stamp
+        self.last_live_lidar_points_used = len(self._live_lidar_points_cache)
+        return self._live_lidar_points_cache
+
+    def build_occupancy_state(self) -> Optional[Dict]:
+        static_occupancy = self._build_static_occupancy_state()
+        live_points = self.build_live_lidar_points()
+        if not live_points:
+            return static_occupancy
+
+        cache_key = (self._static_map_cache_stamp, self._live_lidar_cache_stamp)
+        if (
+            self._fused_occupancy_cache_key == cache_key
+            and self._fused_occupancy_cache is not None
+        ):
+            return self._fused_occupancy_cache
+
+        static_points = (
+            static_occupancy.get("occ_world_xy")
+            if static_occupancy is not None
+            else None
+        )
+        fused_points = combine_occupancy_points(static_points, live_points)
+
+        occupancy = dict(static_occupancy or {})
+        occupancy.update({
+            "frame_id": self.target_policy_frame,
+            "occ_world_xy": fused_points,
+            "live_lidar_points_used": len(live_points),
+            "cells_total": int(occupancy.get("cells_total", 0))
+            + len(live_points),
+            "cells_used": int(occupancy.get("cells_used", 0))
+            + len(live_points),
+        })
+        self._fused_occupancy_cache_key = cache_key
+        self._fused_occupancy_cache = occupancy
         return occupancy
 
     def data_is_stale(self, stamp: Optional[float], now: float, timeout: float) -> bool:
@@ -1602,7 +1853,7 @@ class PolicyCmdVelNode(Node):
             w = clamp(w, -max_angular, max_angular)
 
         command_time = self.now_sec()
-        disable_publish = bool(self.get_parameter("disable_policy_command_publish").value)
+        disable_publish = self.command_publication_is_disabled()
         if disable_publish:
             v = 0.0
             w = 0.0
@@ -1636,7 +1887,8 @@ class PolicyCmdVelNode(Node):
         msg.header.frame_id = self.cmd_frame_id
         msg.twist.linear.x = float(v)
         msg.twist.angular.z = float(w)
-        self.cmd_pub.publish(msg)
+        if not disable_publish:
+            self.cmd_pub.publish(msg)
         self.last_cmd = {"v": float(v), "w": float(w)}
         self.last_cmd_publish_time = command_time
 
@@ -1652,7 +1904,8 @@ class PolicyCmdVelNode(Node):
         msg.header.frame_id = self.cmd_frame_id
         msg.twist.linear.x = 0.0
         msg.twist.angular.z = 0.0
-        self.cmd_pub.publish(msg)
+        if not self.command_publication_is_disabled():
+            self.cmd_pub.publish(msg)
         self.last_final_cmd = {"v": 0.0, "w": 0.0}
         self.last_cmd_clamped = {"linear": False, "angular": False}
         self.last_cmd = {"v": 0.0, "w": 0.0}
@@ -1660,6 +1913,11 @@ class PolicyCmdVelNode(Node):
         self.last_angular_slew_limited = False
         self.last_angular_slew_dt_sec = float("nan")
         self.last_angular_slew_max_delta = float("nan")
+
+    def command_publication_is_disabled(self) -> bool:
+        return self.cmd_pub is None or bool(
+            self.get_parameter("disable_policy_command_publish").value
+        )
 
     def command_source_for_stop_reason(self, reason: str) -> str:
         reason_lower = reason.lower()
@@ -2200,10 +2458,31 @@ class PolicyCmdVelNode(Node):
             return None, "no goal received"
         if self.data_is_stale(self.latest_odom_time, now, stale_timeout):
             return None, f"no fresh {self.odom_topic}"
+        if self.live_lidar_enabled and self.require_live_lidar:
+            lidar_timeout = max(
+                0.1,
+                float(self.get_parameter("lidar_timeout_sec").value),
+            )
+            if self.data_is_stale(
+                self.latest_lidar_time,
+                now,
+                lidar_timeout,
+            ):
+                return None, f"no fresh {self.lidar_topic}"
         goal_timeout = float(self.get_parameter("goal_timeout_sec").value)
         if self.data_is_stale(self.latest_goal_time, now, goal_timeout):
             return None, f"goal timed out: older than {goal_timeout:.1f}s"
+        ignore_people = bool(
+            self.get_parameter("ignore_people_for_policy").value
+        )
+        require_people = bool(
+            self.get_parameter("require_people_stream").value
+        )
+        if not ignore_people and require_people and self.latest_people_time is None:
+            return None, "required /people stream has not been received"
         if self.latest_people_time is not None and self.data_is_stale(self.latest_people_time, now, stale_timeout):
+            if not ignore_people and require_people:
+                return None, "required /people stream is stale"
             if now - self._last_source_log_time > 1.0:
                 self.get_logger().warn("/people is stale; continuing with empty people list")
                 self._last_source_log_time = now
@@ -2378,18 +2657,20 @@ class PolicyCmdVelNode(Node):
         self.publish_cmd(cmd["v"], cmd["w"])
 
     def diffusion_inference_callback(self):
+        if self._shutdown_event.is_set():
+            return
         if not (self.use_diffusion_policy and self.diffusion_adapter is not None):
             return
         if not self.policy_ready_for_goal:
             return
         with self._inference_lock:
-            if self._diffusion_inference_running:
+            if self._shutdown_event.is_set() or self._diffusion_inference_running:
                 return
             self._diffusion_inference_running = True
 
         now = self.now_sec()
         inputs, stop_reason = self.prepare_policy_inputs(now)
-        if stop_reason is not None:
+        if stop_reason is not None or self._shutdown_event.is_set():
             with self._inference_lock:
                 self._diffusion_inference_running = False
             return
@@ -2420,6 +2701,8 @@ class PolicyCmdVelNode(Node):
         start_wall = time.perf_counter()
         try:
             v, w = self.diffusion_adapter.compute_action(robot, people, goal, occupancy, last_cmd, limits)
+            if self._shutdown_event.is_set():
+                return
             self.last_raw_action_type = self.diffusion_adapter.last_action_type
             self.last_policy_state_after_sync = dict(self.diffusion_adapter.last_policy_state_after_sync)
             self.last_raw_model_v_before_conversion = self.diffusion_adapter.last_raw_model_v
@@ -2444,6 +2727,8 @@ class PolicyCmdVelNode(Node):
             duration = time.perf_counter() - start_wall
             projected_trajectory = self.diffusion_adapter.projected_trajectory_for_command()
             predicted_trajectory = self.diffusion_adapter.predicted_trajectory_for_command()
+            if self._shutdown_event.is_set():
+                return
             result_stamp = self.now_sec()
             self.last_projected_trajectory_available = projected_trajectory is not None
             if projected_trajectory is not None:
@@ -2476,11 +2761,12 @@ class PolicyCmdVelNode(Node):
                 )
                 self._last_source_log_time = now
         except Exception as exc:
-            self.clear_trajectory_paths()
-            self.get_logger().error(
-                f"diffusion inference failed; holding previous command until timeout: {type(exc).__name__}: {exc}\n"
-                f"{traceback.format_exc()}"
-            )
+            if not self._shutdown_event.is_set():
+                self.clear_trajectory_paths()
+                self.get_logger().error(
+                    f"diffusion inference failed; holding previous command until timeout: {type(exc).__name__}: {exc}\n"
+                    f"{traceback.format_exc()}"
+                )
         finally:
             with self._inference_lock:
                 self._diffusion_inference_running = False
@@ -2494,6 +2780,7 @@ def main(args=None):
     except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
+        node.prepare_for_shutdown()
         if rclpy.ok():
             node.clear_trajectory_paths()
             node.publish_cmd(0.0, 0.0)

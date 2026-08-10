@@ -6,9 +6,9 @@ policy_cmd_vel_node:
     enable_speed_clamp: true
     max_linear_speed: 0.05
     max_angular_speed: 0.1
-    goal_tolerance: 0.35
+    goal_tolerance: 0.20
     stop_when_goal_reached: true
-    disable_policy_command_publish: false
+    disable_policy_command_publish: true
 
 safety:
   ros__parameters:
