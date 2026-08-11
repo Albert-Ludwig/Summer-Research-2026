@@ -11,11 +11,7 @@ import traceback
 from typing import Any, Dict, List, Optional, Tuple
 
 INFERENCE_REPO_DEFAULT = "/workspace/SocialNavDiffusion_Inference"
-VENV_ROOT_DEFAULT = os.environ.get(
-    "SOCIAL_NAV_DIFFUSION_VENV",
-    "/home/ubuntu/social_nav_diffusion_humble_venv",
-)
-VENV_PYTHON_DEFAULT = f"{VENV_ROOT_DEFAULT}/bin/python"
+VENV_PYTHON_DEFAULT = f"{INFERENCE_REPO_DEFAULT}/.venv/bin/python"
 
 
 def wants_diffusion_policy(argv: List[str]) -> bool:
@@ -29,7 +25,7 @@ def maybe_reexec_for_diffusion():
         return
     if os.path.abspath(sys.executable) == os.path.abspath(VENV_PYTHON_DEFAULT):
         return
-    if os.path.abspath(sys.prefix) == os.path.abspath(VENV_ROOT_DEFAULT):
+    if sys.prefix == f"{INFERENCE_REPO_DEFAULT}/.venv":
         return
     if not os.path.exists(VENV_PYTHON_DEFAULT):
         print(
@@ -40,18 +36,12 @@ def maybe_reexec_for_diffusion():
 
     env = os.environ.copy()
     env["ACADOS_SOURCE_DIR"] = "/home/ubuntu/acados"
-    env["LD_LIBRARY_PATH"] = ":".join(
-        path
-        for path in (
-            "/home/ubuntu/acados/lib",
-            env.get("LD_LIBRARY_PATH", ""),
-        )
-        if path
-    )
+    env["LD_LIBRARY_PATH"] = env.get("LD_LIBRARY_PATH", "") + ":/home/ubuntu/acados/lib"
     extra_pythonpath = [
         INFERENCE_REPO_DEFAULT,
         f"{INFERENCE_REPO_DEFAULT}/diffusers_unet_1d_condition",
-        "/home/ubuntu/hunav_humble_ws/install/people_msgs/local/lib/python3.10/dist-packages",
+        "/home/ubuntu/hunav_jazzy_ws/install/social_nav_diffusion_ros/lib/python3.12/site-packages",
+        "/home/ubuntu/hunav_jazzy_ws/install/people_msgs/lib/python3.12/site-packages",
     ]
     env["PYTHONPATH"] = ":".join(extra_pythonpath + [env.get("PYTHONPATH", "")])
     print(f"[policy_cmd_vel_node] re-exec into diffusion venv: {VENV_PYTHON_DEFAULT}", flush=True)
@@ -67,9 +57,7 @@ from people_msgs.msg import People
 from rclpy.duration import Duration
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
-from rclpy.qos import qos_profile_sensor_data
 from rclpy.time import Time
-from sensor_msgs.msg import LaserScan
 from std_msgs.msg import String
 from tf2_ros import Buffer, TransformException, TransformListener
 from visualization_msgs.msg import Marker
@@ -77,62 +65,6 @@ from visualization_msgs.msg import Marker
 
 def clamp(value: float, lower: float, upper: float) -> float:
     return max(lower, min(upper, value))
-
-
-def voxelized_laser_points(
-    ranges,
-    angle_min: float,
-    angle_increment: float,
-    message_range_min: float,
-    message_range_max: float,
-    configured_range_min: float,
-    configured_range_max: float,
-    voxel_size: float,
-    max_points: int,
-) -> List[Tuple[float, float]]:
-    """Return bounded, nearest-first scan endpoints in the scan frame."""
-    lower = max(float(message_range_min), float(configured_range_min), 0.0)
-    upper_candidates = [float(configured_range_max)]
-    if math.isfinite(float(message_range_max)) and float(message_range_max) > 0.0:
-        upper_candidates.append(float(message_range_max))
-    upper = min(upper_candidates)
-    if upper <= lower or max_points <= 0:
-        return []
-
-    cell_size = max(float(voxel_size), 1e-3)
-    cells: Dict[Tuple[int, int], Tuple[float, float, float]] = {}
-    angle = float(angle_min)
-    increment = float(angle_increment)
-    for raw_range in ranges:
-        distance = float(raw_range)
-        if math.isfinite(distance) and lower <= distance <= upper:
-            x = distance * math.cos(angle)
-            y = distance * math.sin(angle)
-            key = (int(round(x / cell_size)), int(round(y / cell_size)))
-            previous = cells.get(key)
-            if previous is None or distance < previous[0]:
-                cells[key] = (distance, x, y)
-        angle += increment
-
-    nearest = sorted(cells.values(), key=lambda item: item[0])[:max_points]
-    return [(float(x), float(y)) for _, x, y in nearest]
-
-
-def combine_occupancy_points(static_points, live_points):
-    """Combine bounded live points with static occupancy without history."""
-    try:
-        import numpy as np
-
-        lidar_array = np.asarray(live_points, dtype=float).reshape((-1, 2))
-        if static_points is None or len(static_points) == 0:
-            return lidar_array
-        return np.concatenate(
-            (np.asarray(static_points, dtype=float).reshape((-1, 2)), lidar_array),
-            axis=0,
-        )
-    except ImportError:
-        static_list = list(static_points) if static_points is not None else []
-        return static_list + list(live_points)
 
 
 def wrap_angle(angle: float) -> float:
@@ -653,7 +585,6 @@ class PolicyCmdVelNode(Node):
         self.declare_parameter("debug_verbose_state", False)
         self.declare_parameter("debug_csv_path", "")
         self.declare_parameter("ignore_people_for_policy", False)
-        self.declare_parameter("require_people_stream", False)
         self.declare_parameter("ignore_map_for_policy", False)
         self.declare_parameter("force_zero_humans", False)
         self.declare_parameter("fixed_test_goal_in_robot_frame", False)
@@ -670,8 +601,16 @@ class PolicyCmdVelNode(Node):
         self.declare_parameter("robot_v_pref", 1.0)
         self.declare_parameter("robot_radius", 0.25)
         self.declare_parameter("human_radius", 0.25)
-        self.declare_parameter("sync_policy_warm_start_from_odom", False)
-        self.declare_parameter("sync_prev_action_from_odom", False)
+        self.declare_parameter("execution_robot_radius", 0.25)
+        self.declare_parameter("execution_human_radius", 0.40)
+        self.declare_parameter("enable_human_wait", False)
+        self.declare_parameter("human_wait_trigger_distance", 0.70)
+        self.declare_parameter("human_wait_release_distance", 0.85)
+        self.declare_parameter("human_wait_front_half_width", 0.80)
+        self.declare_parameter("human_wait_release_hold_sec", 0.50)
+        self.declare_parameter("projected_alignment_max_position_error", 0.45)
+        self.declare_parameter("sync_policy_warm_start_from_odom", True)
+        self.declare_parameter("sync_prev_action_from_odom", True)
         self.declare_parameter("control_period_sec", 0.1)
         self.declare_parameter("cmd_publish_period_sec", 0.1)
         self.declare_parameter("diffusion_inference_period_sec", 0.1)
@@ -679,9 +618,9 @@ class PolicyCmdVelNode(Node):
         self.declare_parameter("v_max", 1.0)
         self.declare_parameter("w_max", 3.141592653589793)
         self.declare_parameter("max_linear_speed", 1.0)
-        self.declare_parameter("max_angular_speed", 3.141592653589793)
-        self.declare_parameter("goal_tolerance", 0.20)
-        self.declare_parameter("bridge_goal_tolerance", 0.20)
+        self.declare_parameter("max_angular_speed", 3.14)
+        self.declare_parameter("goal_tolerance", 0.25)
+        self.declare_parameter("bridge_goal_tolerance", 0.25)
         self.declare_parameter("goal_timeout_sec", 150.0)
         self.declare_parameter("stop_when_goal_reached", True)
         self.declare_parameter("slow_down_radius", 1.2)
@@ -698,7 +637,7 @@ class PolicyCmdVelNode(Node):
         self.declare_parameter("stop_distance", 0.75)
         self.declare_parameter("front_width", 0.8)
         self.declare_parameter("max_linear_accel", 1.5)
-        self.declare_parameter("max_angular_accel", 3.141592653589793)
+        self.declare_parameter("max_angular_accel", 3.14)
         self.declare_parameter("cmd_frame_id", "base_link")
         self.declare_parameter("people_topic", "/people")
         self.declare_parameter("odom_topic", "/cpr_j100_0001/platform/odom/filtered")
@@ -731,22 +670,12 @@ class PolicyCmdVelNode(Node):
         self.declare_parameter("occupied_threshold", 50)
         self.declare_parameter("max_static_map_cells", 20000)
         self.declare_parameter("treat_unknown_as_occupied", False)
-        self.declare_parameter("enable_live_lidar_to_policy", False)
-        self.declare_parameter("require_live_lidar_for_policy", False)
-        self.declare_parameter(
-            "lidar_topic",
-            "/jackal1/sensors/lidar3d_0/scan",
-        )
-        self.declare_parameter("lidar_timeout_sec", 0.4)
-        self.declare_parameter("lidar_min_range_m", 0.15)
-        self.declare_parameter("lidar_max_range_m", 6.0)
-        self.declare_parameter("lidar_voxel_size_m", 0.10)
-        self.declare_parameter("lidar_max_points", 1000)
         self.declare_parameter("reset_policy_state_on_new_goal", True)
         self.declare_parameter("reset_policy_state_on_goal_reached", True)
         self.declare_parameter("goal_duplicate_position_epsilon", 0.03)
         self.declare_parameter("goal_duplicate_orientation_epsilon", 0.05)
         self.declare_parameter("enable_projected_trajectory_sampling", True)
+        self.declare_parameter("enable_projected_trajectory_latency_compensation", False)
         self.declare_parameter("projected_trajectory_fallback_to_hold", True)
         self.declare_parameter("enable_policy_warmup", True)
         self.declare_parameter("warmup_on_startup", True)
@@ -776,8 +705,7 @@ class PolicyCmdVelNode(Node):
         self._last_source_log_time = 0.0
         self._last_hold_log_time = 0.0
         self._inference_lock = threading.Lock()
-        self._shutdown_event = threading.Event()
-        self._latest_policy_cmd: Optional[Dict[str, float]] = None
+        self._latest_policy_cmd: Optional[Dict[str, Any]] = None
         self._diffusion_thread: Optional[threading.Thread] = None
         self._diffusion_inference_running = False
         self._goal_lock = threading.RLock()
@@ -800,27 +728,18 @@ class PolicyCmdVelNode(Node):
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
         self.target_policy_frame = str(self.get_parameter("target_policy_frame").value)
-        self.live_lidar_enabled = bool(
-            self.get_parameter("enable_live_lidar_to_policy").value
-        )
-        self.require_live_lidar = bool(
-            self.get_parameter("require_live_lidar_for_policy").value
-        )
-        self.lidar_topic = str(self.get_parameter("lidar_topic").value)
         self.last_frame_debug = {
             "latest_odom_header_frame_id": "",
             "latest_odom_child_frame_id": "",
             "latest_goal_header_frame_id": "",
             "latest_map_header_frame_id": "",
             "latest_people_header_frame_id": "",
-            "latest_lidar_header_frame_id": "",
             "people_frame_used": "",
             "target_policy_frame": self.target_policy_frame,
             "tf_robot_to_target_success": False,
             "tf_goal_to_target_success": False,
             "tf_people_to_target_success": False,
             "tf_map_to_target_success": False,
-            "tf_lidar_to_target_success": False,
             "tf_failure_reason": "",
         }
         self._logged_frame_ids = False
@@ -832,11 +751,6 @@ class PolicyCmdVelNode(Node):
         self._static_map_downsampled = False
         self._static_map_frame_id = ""
         self.last_static_map_has_map_value = 0.0
-        self._live_lidar_cache_stamp = None
-        self._live_lidar_points_cache: List[Tuple[float, float]] = []
-        self._fused_occupancy_cache_key = None
-        self._fused_occupancy_cache = None
-        self.last_live_lidar_points_used = 0
         self.last_policy_state_reset_on_new_goal = False
         self.last_policy_state_reset_on_goal_reached = False
         self.last_policy_state_after_reset = {}
@@ -850,6 +764,10 @@ class PolicyCmdVelNode(Node):
         self.last_projected_trajectory_point_count = 0
         self.last_projected_trajectory_frame_id = self.target_policy_frame
         self.last_projected_trajectory_publish_time = float("nan")
+        self.last_projected_trajectory_input_stamp_sec = float("nan")
+        self.last_projected_trajectory_result_stamp_sec = float("nan")
+        self.last_projected_trajectory_latency_compensation_sec = float("nan")
+        self.last_projected_trajectory_execution_age_sec = float("nan")
         self.last_predicted_trajectory_available = False
         self.last_predicted_trajectory_point_count = 0
         self.last_goal_within_tolerance = False
@@ -860,6 +778,17 @@ class PolicyCmdVelNode(Node):
         self.bridge_goal_republish_count = 0
         self.last_goal_distance_frame = self.target_policy_frame
         self.last_goal_distance_tf_success = False
+        self.human_wait_active = False
+        self.human_wait_entry_count = 0
+        self.human_wait_started_at: Optional[float] = None
+        self.human_wait_clear_since: Optional[float] = None
+        self.last_human_wait_duration_sec = 0.0
+        self.last_human_min_distance = float("nan")
+        self.last_human_blocking_distance = float("nan")
+        self.last_projected_alignment_success = False
+        self.last_projected_alignment_offset_sec = 0.0
+        self.last_projected_alignment_position_error = float("nan")
+        self.last_projected_alignment_heading_error = float("nan")
         self._goal_reached_handled = False
 
         if self.use_diffusion_policy:
@@ -888,8 +817,6 @@ class PolicyCmdVelNode(Node):
         self.latest_people_frame_id = ""
         self.latest_map: Optional[OccupancyGrid] = None
         self.latest_map_time: Optional[float] = None
-        self.latest_lidar_scan: Optional[LaserScan] = None
-        self.latest_lidar_time: Optional[float] = None
         self.latest_goal: Optional[PoseStamped] = None
         self.latest_goal_time: Optional[float] = None
         self.last_cmd = {"v": 0.0, "w": 0.0}
@@ -897,6 +824,9 @@ class PolicyCmdVelNode(Node):
         self.last_final_cmd = {"v": 0.0, "w": 0.0}
         self.last_cmd_clamped = {"linear": False, "angular": False}
         self.last_cmd_publish_time: Optional[float] = None
+        self.last_linear_slew_limited = False
+        self.last_linear_slew_dt_sec = float("nan")
+        self.last_linear_slew_max_delta = float("nan")
         self.last_angular_slew_limited = False
         self.last_angular_slew_dt_sec = float("nan")
         self.last_angular_slew_max_delta = float("nan")
@@ -931,22 +861,10 @@ class PolicyCmdVelNode(Node):
         self.create_subscription(People, self.people_topic, self.people_callback, 10)
         self.create_subscription(Odometry, self.odom_topic, self.odom_callback, 20)
         self.create_subscription(OccupancyGrid, self.map_topic, self.map_callback, 1)
-        if self.live_lidar_enabled:
-            self.create_subscription(
-                LaserScan,
-                self.lidar_topic,
-                self.lidar_callback,
-                qos_profile_sensor_data,
-            )
         self.create_subscription(PoseStamped, self.goal_topic, self.goal_callback, 10)
         self.create_subscription(PoseStamped, self.robot_goal_topic, self.goal_callback, 10)
 
-        self.command_publish_disabled = bool(
-            self.get_parameter("disable_policy_command_publish").value
-        )
-        self.cmd_pub = None
-        if not self.command_publish_disabled:
-            self.cmd_pub = self.create_publisher(TwistStamped, self.cmd_vel_topic, 10)
+        self.cmd_pub = self.create_publisher(TwistStamped, self.cmd_vel_topic, 10)
         self.active_goal_marker_pub = self.create_publisher(Marker, self.active_goal_marker_topic, 10)
         self.goal_path_pub = self.create_publisher(Path, self.goal_path_topic, 10)
         self.projected_trajectory_pub = self.create_publisher(Path, self.projected_trajectory_topic, 10)
@@ -969,15 +887,9 @@ class PolicyCmdVelNode(Node):
             )
         else:
             mode = "placeholder"
-        if self.command_publish_disabled:
-            command_output = "command publication disabled; no cmd_vel publisher created"
-        else:
-            command_output = (
-                f"publishing TwistStamped to {self.cmd_vel_topic} "
-                f"every {self.cmd_publish_period:.3f}s"
-            )
         self.get_logger().info(
-            f"policy_cmd_vel_node ready: mode={mode}, {command_output}"
+            "policy_cmd_vel_node ready: "
+            f"mode={mode}, publishing TwistStamped to {self.cmd_vel_topic} every {self.cmd_publish_period:.3f}s"
         )
         if (
             self.use_diffusion_policy
@@ -1038,14 +950,8 @@ class PolicyCmdVelNode(Node):
         return float(getattr(self.diffusion_adapter.policy, "time_step", float("nan")))
 
     def start_policy_warmup(self):
-        if self._shutdown_event.is_set():
-            return
         with self._inference_lock:
-            if (
-                self._shutdown_event.is_set()
-                or self._diffusion_inference_running
-                or self.policy_warmup_started
-            ):
+            if self._diffusion_inference_running or self.policy_warmup_started:
                 return
             self._diffusion_inference_running = True
             self.policy_warmup_started = True
@@ -1064,8 +970,6 @@ class PolicyCmdVelNode(Node):
         self._diffusion_thread.start()
 
     def policy_warmup_watchdog_callback(self):
-        if self._shutdown_event.is_set():
-            return
         if not self.policy_warmup_started or self.policy_warmup_complete:
             return
         if self._policy_warmup_wall_start is None:
@@ -1117,10 +1021,9 @@ class PolicyCmdVelNode(Node):
             success = True
         except Exception as exc:
             error = f"{type(exc).__name__}: {exc}"
-            if not self._shutdown_event.is_set():
-                self.get_logger().error(
-                    f"Policy warm-up failed: {error}\n{traceback.format_exc()}"
-                )
+            self.get_logger().error(
+                f"Policy warm-up failed: {error}\n{traceback.format_exc()}"
+            )
         finally:
             duration = time.perf_counter() - start_wall
             self.policy_warmup_duration_sec = duration
@@ -1132,10 +1035,10 @@ class PolicyCmdVelNode(Node):
                 success = False
                 cleanup_error = f"warm-up state reset failed: {type(exc).__name__}: {exc}"
                 error = f"{error}; {cleanup_error}" if error else cleanup_error
-                if not self._shutdown_event.is_set():
-                    self.get_logger().error(cleanup_error)
+                self.get_logger().error(cleanup_error)
 
             self.clear_latest_policy_cmd()
+            self.clear_trajectory_paths()
             self.last_cmd = {"v": 0.0, "w": 0.0}
             self.last_raw_cmd = {"v": 0.0, "w": 0.0}
             self.last_final_cmd = {"v": 0.0, "w": 0.0}
@@ -1144,19 +1047,13 @@ class PolicyCmdVelNode(Node):
             self.last_raw_model_v_before_conversion = float("nan")
             self.last_raw_model_r_or_w_before_conversion = float("nan")
             self.last_command_source = "no_goal"
-            if not self._shutdown_event.is_set():
-                self.clear_trajectory_paths()
-                self.publish_zero_cmd_preserve_model_debug()
+            self.publish_zero_cmd_preserve_model_debug()
 
             self.policy_warmup_complete = True
             self.policy_warmup_success = success
             self.policy_warmup_error = error
             with self._inference_lock:
                 self._diffusion_inference_running = False
-
-            if self._shutdown_event.is_set():
-                self.policy_ready_for_goal = False
-                return
 
             if success:
                 self.get_logger().info(f"Policy warm-up completed in {duration:.3f} s")
@@ -1171,40 +1068,6 @@ class PolicyCmdVelNode(Node):
                 self.get_logger().info("Policy ready for real goals")
             else:
                 self.policy_ready_for_goal = False
-
-    def prepare_for_shutdown(self, join_timeout_sec: float = 5.0):
-        self._shutdown_event.set()
-        self.policy_ready_for_goal = False
-
-        for timer_name in (
-            "cmd_timer",
-            "policy_debug_timer",
-            "diffusion_timer",
-            "policy_warmup_watchdog_timer",
-        ):
-            timer = getattr(self, timer_name, None)
-            if timer is not None:
-                timer.cancel()
-
-        with self._goal_lock:
-            self._goal_generation += 1
-            self.latest_goal = None
-            self.latest_goal_time = None
-            self._pending_goal_during_warmup = None
-            self._pending_goal_received_time = None
-
-        thread = self._diffusion_thread
-        if (
-            thread is not None
-            and thread.is_alive()
-            and thread is not threading.current_thread()
-        ):
-            thread.join(timeout=max(0.0, float(join_timeout_sec)))
-            if thread.is_alive() and rclpy.ok():
-                self.get_logger().warn(
-                    "Inference thread is still finishing after shutdown request; "
-                    "ROS publication is disabled for that thread"
-                )
 
     def tf_enabled(self) -> bool:
         return bool(self.get_parameter("enable_tf_transforms").value)
@@ -1258,6 +1121,7 @@ class PolicyCmdVelNode(Node):
     def invalidate_policy_command_state(self):
         self.clear_latest_policy_cmd()
         self.clear_trajectory_paths()
+        self.reset_projected_alignment_debug()
         self.last_projected_trajectory_available = False
         self.last_projected_trajectory_active = False
         self.last_projected_trajectory_sample_time_sec = float("nan")
@@ -1286,7 +1150,7 @@ class PolicyCmdVelNode(Node):
     def policy_occ_world_xy_len(self) -> int:
         if self.diffusion_adapter is None or self.diffusion_adapter.policy is None:
             return 0
-        occ = getattr(self.diffusion_adapter.policy, "cur_occ_world_xy", None)
+        occ = getattr(self.diffusion_adapter.policy, "_cur_occ_world_xy", None)
         if occ is None:
             return 0
         try:
@@ -1310,16 +1174,6 @@ class PolicyCmdVelNode(Node):
     def map_callback(self, msg: OccupancyGrid):
         self.latest_map = msg
         self.latest_map_time = self.now_sec()
-        self._fused_occupancy_cache_key = None
-
-    def lidar_callback(self, msg: LaserScan):
-        self.latest_lidar_scan = msg
-        self.latest_lidar_time = self.now_sec()
-        self.last_frame_debug["latest_lidar_header_frame_id"] = (
-            msg.header.frame_id or ""
-        )
-        self._live_lidar_cache_stamp = None
-        self._fused_occupancy_cache_key = None
 
     def goal_position_delta(self, old_goal: PoseStamped, new_goal: PoseStamped) -> float:
         dx = float(new_goal.pose.position.x) - float(old_goal.pose.position.x)
@@ -1390,6 +1244,7 @@ class PolicyCmdVelNode(Node):
 
     def _accept_new_goal_locked(self, msg: PoseStamped):
         self._goal_generation += 1
+        self.reset_human_wait_state()
         self.latest_goal = copy.deepcopy(msg)
         if not self.latest_goal.header.frame_id:
             self.latest_goal.header.frame_id = "map"
@@ -1436,14 +1291,15 @@ class PolicyCmdVelNode(Node):
             ),
         }
 
-    def build_people_states(self, robot: Dict[str, float]) -> List[Dict[str, float]]:
+    def build_people_states(self, robot: Dict[str, float], source_people=None) -> List[Dict[str, float]]:
         states = []
         cos_yaw = math.cos(robot["yaw"])
         sin_yaw = math.sin(robot["yaw"])
         people_frame = self.latest_people_frame_id or str(self.get_parameter("people_frame").value) or self.target_policy_frame
         self.last_frame_debug["latest_people_header_frame_id"] = self.latest_people_frame_id
         self.last_frame_debug["people_frame_used"] = people_frame
-        for person in self.latest_people:
+        people_messages = self.latest_people if source_people is None else source_people
+        for person in people_messages:
             px, py = self.transform_xy_to_target(
                 person.position.x, person.position.y, people_frame, "tf_people_to_target_success"
             )
@@ -1465,7 +1321,7 @@ class PolicyCmdVelNode(Node):
                     "rel_y": rel_y,
                 }
             )
-        if not self.latest_people:
+        if not people_messages:
             self.last_frame_debug["tf_people_to_target_success"] = True
         return states
 
@@ -1506,6 +1362,113 @@ class PolicyCmdVelNode(Node):
             "heading_error": heading_error,
         }
 
+    def reset_projected_alignment_debug(self):
+        self.last_projected_alignment_success = False
+        self.last_projected_alignment_offset_sec = 0.0
+        self.last_projected_alignment_position_error = float("nan")
+        self.last_projected_alignment_heading_error = float("nan")
+
+    def reset_human_wait_state(self):
+        self.human_wait_active = False
+        self.human_wait_started_at = None
+        self.human_wait_clear_since = None
+        self.last_human_wait_duration_sec = 0.0
+        self.last_human_blocking_distance = float("nan")
+
+    def human_wait_safety_distance(self) -> float:
+        return max(
+            0.0,
+            float(self.get_parameter("execution_robot_radius").value)
+            + float(self.get_parameter("execution_human_radius").value),
+        )
+
+    def update_human_wait_state(
+        self,
+        robot: Dict[str, float],
+        people: List[Dict[str, float]],
+        now: float,
+        people_stale: bool,
+    ) -> bool:
+        distances = [float(person["distance"]) for person in people]
+        self.last_human_min_distance = min(distances) if distances else float("nan")
+
+        if not bool(self.get_parameter("enable_human_wait").value):
+            self.reset_human_wait_state()
+            return False
+
+        safety_distance = self.human_wait_safety_distance()
+        trigger_distance = max(
+            safety_distance,
+            float(self.get_parameter("human_wait_trigger_distance").value),
+        )
+        release_distance = max(
+            trigger_distance + 1e-3,
+            float(self.get_parameter("human_wait_release_distance").value),
+        )
+        front_half_width = max(
+            0.0, float(self.get_parameter("human_wait_front_half_width").value)
+        )
+
+        if self.human_wait_active:
+            if self.human_wait_started_at is not None:
+                self.last_human_wait_duration_sec = max(0.0, now - self.human_wait_started_at)
+            clear = (not people_stale) and all(distance >= release_distance for distance in distances)
+            if clear:
+                if self.human_wait_clear_since is None:
+                    self.human_wait_clear_since = now
+                hold_sec = max(
+                    0.0, float(self.get_parameter("human_wait_release_hold_sec").value)
+                )
+                if now - self.human_wait_clear_since >= hold_sec:
+                    duration = self.last_human_wait_duration_sec
+                    with self._goal_lock:
+                        if not self.human_wait_active:
+                            return False
+                        self.human_wait_active = False
+                        self.human_wait_started_at = None
+                        self.human_wait_clear_since = None
+                        self.last_human_blocking_distance = float("nan")
+                        self._goal_generation += 1
+                        self.invalidate_policy_command_state()
+                    self.get_logger().info(
+                        f"human clearance restored after {duration:.2f}s; replanning from odometry"
+                    )
+            else:
+                self.human_wait_clear_since = None
+            return self.human_wait_active
+
+        if people_stale:
+            return False
+
+        blocking = [
+            person for person in people
+            if float(person["rel_x"]) >= 0.0
+            and abs(float(person["rel_y"])) <= front_half_width
+            and float(person["distance"]) <= trigger_distance
+        ]
+        if not blocking:
+            self.last_human_blocking_distance = float("nan")
+            return False
+
+        blocking_distance = min(float(person["distance"]) for person in blocking)
+        with self._goal_lock:
+            if self.human_wait_active:
+                return True
+            self.human_wait_active = True
+            self.human_wait_entry_count += 1
+            self.human_wait_started_at = now
+            self.human_wait_clear_since = None
+            self.last_human_wait_duration_sec = 0.0
+            self.last_human_blocking_distance = blocking_distance
+            self._goal_generation += 1
+            self.invalidate_policy_command_state()
+        self.get_logger().warn(
+            "human safety wait entered: "
+            f"distance={blocking_distance:.3f}m, trigger={trigger_distance:.3f}m, "
+            f"hard_clearance={safety_distance:.3f}m"
+        )
+        return True
+
     def remember_goal_debug(self, goal: Dict[str, float]):
         self.last_policy_goal_x_map = float(goal["x"])
         self.last_policy_goal_y_map = float(goal["y"])
@@ -1525,7 +1488,7 @@ class PolicyCmdVelNode(Node):
         self.last_heading_to_goal = float(goal["heading_to_goal"])
         self.last_heading_error = float(goal["heading_error"])
 
-    def _build_static_occupancy_state(self) -> Optional[Dict]:
+    def build_occupancy_state(self) -> Optional[Dict]:
         if self.latest_map is None or bool(self.get_parameter("ignore_map_for_policy").value):
             self.last_static_map_has_map_value = 0.0
             return None
@@ -1632,86 +1595,6 @@ class PolicyCmdVelNode(Node):
         self._static_map_cells_used = len(transformed)
         self._static_map_downsampled = downsampled
         self.last_static_map_has_map_value = 1.0 if transformed else 0.0
-        return occupancy
-
-    def build_live_lidar_points(self) -> List[Tuple[float, float]]:
-        if not self.live_lidar_enabled or self.latest_lidar_scan is None:
-            self.last_live_lidar_points_used = 0
-            return []
-
-        msg = self.latest_lidar_scan
-        stamp = (
-            int(msg.header.stamp.sec),
-            int(msg.header.stamp.nanosec),
-            msg.header.frame_id or "",
-            len(msg.ranges),
-        )
-        if self._live_lidar_cache_stamp == stamp:
-            return self._live_lidar_points_cache
-
-        local_points = voxelized_laser_points(
-            msg.ranges,
-            msg.angle_min,
-            msg.angle_increment,
-            msg.range_min,
-            msg.range_max,
-            float(self.get_parameter("lidar_min_range_m").value),
-            float(self.get_parameter("lidar_max_range_m").value),
-            float(self.get_parameter("lidar_voxel_size_m").value),
-            max(1, int(self.get_parameter("lidar_max_points").value)),
-        )
-        source_frame = msg.header.frame_id or self.target_policy_frame
-        transform = self.lookup_transform_to_target(
-            source_frame,
-            "tf_lidar_to_target_success",
-        )
-        if transform is None:
-            transformed = local_points
-        else:
-            transformed = [
-                apply_transform_xy(x, y, transform)
-                for x, y in local_points
-            ]
-
-        self._live_lidar_points_cache = [
-            (float(x), float(y)) for x, y in transformed
-        ]
-        self._live_lidar_cache_stamp = stamp
-        self.last_live_lidar_points_used = len(self._live_lidar_points_cache)
-        return self._live_lidar_points_cache
-
-    def build_occupancy_state(self) -> Optional[Dict]:
-        static_occupancy = self._build_static_occupancy_state()
-        live_points = self.build_live_lidar_points()
-        if not live_points:
-            return static_occupancy
-
-        cache_key = (self._static_map_cache_stamp, self._live_lidar_cache_stamp)
-        if (
-            self._fused_occupancy_cache_key == cache_key
-            and self._fused_occupancy_cache is not None
-        ):
-            return self._fused_occupancy_cache
-
-        static_points = (
-            static_occupancy.get("occ_world_xy")
-            if static_occupancy is not None
-            else None
-        )
-        fused_points = combine_occupancy_points(static_points, live_points)
-
-        occupancy = dict(static_occupancy or {})
-        occupancy.update({
-            "frame_id": self.target_policy_frame,
-            "occ_world_xy": fused_points,
-            "live_lidar_points_used": len(live_points),
-            "cells_total": int(occupancy.get("cells_total", 0))
-            + len(live_points),
-            "cells_used": int(occupancy.get("cells_used", 0))
-            + len(live_points),
-        })
-        self._fused_occupancy_cache_key = cache_key
-        self._fused_occupancy_cache = occupancy
         return occupancy
 
     def data_is_stale(self, stamp: Optional[float], now: float, timeout: float) -> bool:
@@ -1853,10 +1736,13 @@ class PolicyCmdVelNode(Node):
             w = clamp(w, -max_angular, max_angular)
 
         command_time = self.now_sec()
-        disable_publish = self.command_publication_is_disabled()
+        disable_publish = bool(self.get_parameter("disable_policy_command_publish").value)
         if disable_publish:
             v = 0.0
             w = 0.0
+            self.last_linear_slew_limited = False
+            self.last_linear_slew_dt_sec = float("nan")
+            self.last_linear_slew_max_delta = float("nan")
             self.last_angular_slew_limited = False
             self.last_angular_slew_dt_sec = float("nan")
             self.last_angular_slew_max_delta = float("nan")
@@ -1866,6 +1752,18 @@ class PolicyCmdVelNode(Node):
                 measured_dt = command_time - self.last_cmd_publish_time
                 if measured_dt > 0.0:
                     actual_dt = measured_dt
+
+            max_dv = abs(float(self.get_parameter("max_linear_accel").value)) * actual_dt
+            slew_limited_v = clamp(
+                v,
+                self.last_cmd["v"] - max_dv,
+                self.last_cmd["v"] + max_dv,
+            )
+            self.last_linear_slew_limited = abs(slew_limited_v - v) > 1e-9
+            self.last_linear_slew_dt_sec = actual_dt
+            self.last_linear_slew_max_delta = max_dv
+            v = slew_limited_v
+
             max_dw = abs(float(self.get_parameter("max_angular_accel").value)) * actual_dt
             slew_limited_w = clamp(
                 w,
@@ -1887,8 +1785,7 @@ class PolicyCmdVelNode(Node):
         msg.header.frame_id = self.cmd_frame_id
         msg.twist.linear.x = float(v)
         msg.twist.angular.z = float(w)
-        if not disable_publish:
-            self.cmd_pub.publish(msg)
+        self.cmd_pub.publish(msg)
         self.last_cmd = {"v": float(v), "w": float(w)}
         self.last_cmd_publish_time = command_time
 
@@ -1904,20 +1801,17 @@ class PolicyCmdVelNode(Node):
         msg.header.frame_id = self.cmd_frame_id
         msg.twist.linear.x = 0.0
         msg.twist.angular.z = 0.0
-        if not self.command_publication_is_disabled():
-            self.cmd_pub.publish(msg)
+        self.cmd_pub.publish(msg)
         self.last_final_cmd = {"v": 0.0, "w": 0.0}
         self.last_cmd_clamped = {"linear": False, "angular": False}
         self.last_cmd = {"v": 0.0, "w": 0.0}
         self.last_cmd_publish_time = self.now_sec()
+        self.last_linear_slew_limited = False
+        self.last_linear_slew_dt_sec = float("nan")
+        self.last_linear_slew_max_delta = float("nan")
         self.last_angular_slew_limited = False
         self.last_angular_slew_dt_sec = float("nan")
         self.last_angular_slew_max_delta = float("nan")
-
-    def command_publication_is_disabled(self) -> bool:
-        return self.cmd_pub is None or bool(
-            self.get_parameter("disable_policy_command_publish").value
-        )
 
     def command_source_for_stop_reason(self, reason: str) -> str:
         reason_lower = reason.lower()
@@ -1925,6 +1819,8 @@ class PolicyCmdVelNode(Node):
             return "zero_goal_reached"
         if "no goal" in reason_lower:
             return "no_goal"
+        if "waiting for human clearance" in reason_lower:
+            return "zero_human_wait"
         if "waiting for first diffusion" in reason_lower:
             return "diffusion"
         if "placeholder" in reason_lower:
@@ -2020,6 +1916,10 @@ class PolicyCmdVelNode(Node):
         self.last_projected_trajectory_active = False
         self.last_projected_trajectory_point_count = 0
         self.last_projected_trajectory_publish_time = float("nan")
+        self.last_projected_trajectory_input_stamp_sec = float("nan")
+        self.last_projected_trajectory_result_stamp_sec = float("nan")
+        self.last_projected_trajectory_latency_compensation_sec = float("nan")
+        self.last_projected_trajectory_execution_age_sec = float("nan")
         self.last_predicted_trajectory_available = False
         self.last_predicted_trajectory_point_count = 0
 
@@ -2188,6 +2088,17 @@ class PolicyCmdVelNode(Node):
             "robot_v_pref": float(self.get_parameter("robot_v_pref").value),
             "robot_radius": float(self.get_parameter("robot_radius").value),
             "human_radius": float(self.get_parameter("human_radius").value),
+            "execution_robot_radius": float(self.get_parameter("execution_robot_radius").value),
+            "execution_human_radius": float(self.get_parameter("execution_human_radius").value),
+            "human_safety_center_distance": self.human_wait_safety_distance(),
+            "enable_human_wait": bool(self.get_parameter("enable_human_wait").value),
+            "human_wait_active": self.human_wait_active,
+            "human_wait_entry_count": self.human_wait_entry_count,
+            "human_wait_duration_sec": self.last_human_wait_duration_sec,
+            "human_wait_min_distance": self.last_human_min_distance,
+            "human_wait_blocking_distance": self.last_human_blocking_distance,
+            "human_wait_trigger_distance": float(self.get_parameter("human_wait_trigger_distance").value),
+            "human_wait_release_distance": float(self.get_parameter("human_wait_release_distance").value),
             "odom_linear_velocity_used_for_sync": self.last_odom_linear_velocity_used_for_sync,
             "odom_angular_velocity_used_for_sync": self.last_odom_angular_velocity_used_for_sync,
             "policy_time_step": float(getattr(self.diffusion_adapter.policy, "time_step", float("nan"))) if self.diffusion_adapter is not None else float("nan"),
@@ -2229,6 +2140,10 @@ class PolicyCmdVelNode(Node):
             "final_cmd_angular": self.last_final_cmd["w"],
             "linear_clamped": self.last_cmd_clamped["linear"],
             "angular_clamped": self.last_cmd_clamped["angular"],
+            "linear_slew_limited": self.last_linear_slew_limited,
+            "linear_slew_dt_sec": self.last_linear_slew_dt_sec,
+            "linear_slew_max_delta": self.last_linear_slew_max_delta,
+            "max_linear_accel": float(self.get_parameter("max_linear_accel").value),
             "angular_slew_limited": self.last_angular_slew_limited,
             "angular_slew_dt_sec": self.last_angular_slew_dt_sec,
             "angular_slew_max_delta": self.last_angular_slew_max_delta,
@@ -2279,7 +2194,7 @@ class PolicyCmdVelNode(Node):
             "static_map_downsampled": self._static_map_downsampled,
             "static_map_has_map_value": self.last_static_map_has_map_value,
             "static_map_last_update_time": self._static_map_last_update_time,
-            "policy_cur_has_map": float(getattr(self.diffusion_adapter.policy, "cur_has_map", float("nan"))) if self.diffusion_adapter is not None else float("nan"),
+            "policy_cur_has_map": float(getattr(self.diffusion_adapter.policy, "_cur_has_map", float("nan"))) if self.diffusion_adapter is not None else float("nan"),
             "policy_cur_occ_world_xy_len": self.policy_occ_world_xy_len(),
             "max_linear_speed": float(self.get_parameter("max_linear_speed").value),
             "max_angular_speed": float(self.get_parameter("max_angular_speed").value),
@@ -2308,6 +2223,7 @@ class PolicyCmdVelNode(Node):
             "policy_v0_from_last_step_after_sync": self.last_policy_state_after_sync.get("_v0_from_last_step", float("nan")),
             "policy_w0_from_last_step_after_sync": self.last_policy_state_after_sync.get("_w0_from_last_step", float("nan")),
             "enable_projected_trajectory_sampling": bool(self.get_parameter("enable_projected_trajectory_sampling").value),
+            "enable_projected_trajectory_latency_compensation": bool(self.get_parameter("enable_projected_trajectory_latency_compensation").value),
             "projected_trajectory_fallback_to_hold": bool(self.get_parameter("projected_trajectory_fallback_to_hold").value),
             "projected_trajectory_available": self.last_projected_trajectory_available,
             "projected_trajectory_active": self.last_projected_trajectory_active,
@@ -2321,6 +2237,17 @@ class PolicyCmdVelNode(Node):
             "projected_trajectory_frame_id": self.last_projected_trajectory_frame_id,
             "projected_trajectory_publish_time": self.last_projected_trajectory_publish_time,
             "projected_trajectory_age_sec": projected_trajectory_age,
+            "projected_trajectory_input_stamp_sec": self.last_projected_trajectory_input_stamp_sec,
+            "projected_trajectory_result_stamp_sec": self.last_projected_trajectory_result_stamp_sec,
+            "projected_trajectory_latency_compensation_sec": self.last_projected_trajectory_latency_compensation_sec,
+            "projected_trajectory_execution_age_sec": self.last_projected_trajectory_execution_age_sec,
+            "projected_alignment_success": self.last_projected_alignment_success,
+            "projected_alignment_offset_sec": self.last_projected_alignment_offset_sec,
+            "projected_alignment_position_error": self.last_projected_alignment_position_error,
+            "projected_alignment_heading_error": self.last_projected_alignment_heading_error,
+            "projected_alignment_max_position_error": float(
+                self.get_parameter("projected_alignment_max_position_error").value
+            ),
             "projected_trajectory_topic": self.projected_trajectory_topic,
             "actionxy_angular_dt_used": self.diffusion_adapter.last_actionxy_angular_dt_used if self.diffusion_adapter is not None else float("nan"),
             "sign_conflict_guard_active": self.last_sign_conflict_guard_active,
@@ -2435,6 +2362,7 @@ class PolicyCmdVelNode(Node):
         if self._goal_reached_handled:
             return
         self._goal_generation += 1
+        self.reset_human_wait_state()
         if bool(self.get_parameter("reset_policy_state_on_goal_reached").value):
             self.reset_policy_state("goal_reached")
         else:
@@ -2445,6 +2373,7 @@ class PolicyCmdVelNode(Node):
 
     def handle_goal_timeout(self):
         self._goal_generation += 1
+        self.reset_human_wait_state()
         self.invalidate_policy_command_state()
         self.latest_goal = None
         self.latest_goal_time = None
@@ -2458,40 +2387,25 @@ class PolicyCmdVelNode(Node):
             return None, "no goal received"
         if self.data_is_stale(self.latest_odom_time, now, stale_timeout):
             return None, f"no fresh {self.odom_topic}"
-        if self.live_lidar_enabled and self.require_live_lidar:
-            lidar_timeout = max(
-                0.1,
-                float(self.get_parameter("lidar_timeout_sec").value),
-            )
-            if self.data_is_stale(
-                self.latest_lidar_time,
-                now,
-                lidar_timeout,
-            ):
-                return None, f"no fresh {self.lidar_topic}"
         goal_timeout = float(self.get_parameter("goal_timeout_sec").value)
         if self.data_is_stale(self.latest_goal_time, now, goal_timeout):
             return None, f"goal timed out: older than {goal_timeout:.1f}s"
-        ignore_people = bool(
-            self.get_parameter("ignore_people_for_policy").value
+        people_stale = (
+            self.latest_people_time is not None
+            and self.data_is_stale(self.latest_people_time, now, stale_timeout)
         )
-        require_people = bool(
-            self.get_parameter("require_people_stream").value
-        )
-        if not ignore_people and require_people and self.latest_people_time is None:
-            return None, "required /people stream has not been received"
-        if self.latest_people_time is not None and self.data_is_stale(self.latest_people_time, now, stale_timeout):
-            if not ignore_people and require_people:
-                return None, "required /people stream is stale"
-            if now - self._last_source_log_time > 1.0:
-                self.get_logger().warn("/people is stale; continuing with empty people list")
-                self._last_source_log_time = now
-            self.latest_people = []
+        if people_stale and now - self._last_source_log_time > 1.0:
+            self.get_logger().warn("/people is stale; excluding stale people from policy input")
+            self._last_source_log_time = now
 
         try:
             robot = self.build_robot_state()
             people_seen = self.build_people_states(robot)
-            if bool(self.get_parameter("ignore_people_for_policy").value) or bool(self.get_parameter("force_zero_humans").value):
+            if (
+                people_stale
+                or bool(self.get_parameter("ignore_people_for_policy").value)
+                or bool(self.get_parameter("force_zero_humans").value)
+            ):
                 people = []
             else:
                 people = people_seen
@@ -2513,7 +2427,84 @@ class PolicyCmdVelNode(Node):
             self.handle_goal_reached()
             return None, "goal reached"
 
+        if self.update_human_wait_state(robot, people_seen, now, people_stale):
+            return None, "waiting for human clearance"
+
         return (robot, people, goal, occupancy), None
+
+    def align_projected_trajectory_start(
+        self,
+        trajectory: Optional[Dict[str, Any]],
+        inference_robot: Dict[str, float],
+        elapsed_ros_sec: float,
+    ) -> float:
+        self.reset_projected_alignment_debug()
+        if not trajectory or trajectory.get("x_traj") is None:
+            return 0.0
+
+        try:
+            current_robot = self.build_robot_state()
+            x_traj = trajectory["x_traj"]
+            dt = float(trajectory.get("dt", float("nan")))
+            point_count = len(x_traj)
+            if point_count == 0 or not math.isfinite(dt) or dt <= 0.0:
+                return 0.0
+
+            origin_yaw = float(inference_robot["yaw"])
+            dx = float(current_robot["x"]) - float(inference_robot["x"])
+            dy = float(current_robot["y"]) - float(inference_robot["y"])
+            cos_yaw = math.cos(origin_yaw)
+            sin_yaw = math.sin(origin_yaw)
+            current_x_ego = cos_yaw * dx + sin_yaw * dy
+            current_y_ego = -sin_yaw * dx + cos_yaw * dy
+            current_heading_ego = wrap_angle(float(current_robot["yaw"]) - origin_yaw)
+            current_v = float(current_robot.get("linear_velocity", 0.0))
+            current_w = float(current_robot.get("angular_velocity", 0.0))
+
+            max_offset = max(0.0, float(elapsed_ros_sec)) + self.cmd_publish_period
+            max_index = min(point_count - 1, int(math.floor(max_offset / dt)) + 1)
+            best = None
+            for index in range(max_index + 1):
+                state = x_traj[index]
+                position_error = math.hypot(
+                    float(state[0]) - current_x_ego,
+                    float(state[1]) - current_y_ego,
+                )
+                heading_error = abs(wrap_angle(float(state[2]) - current_heading_ego))
+                velocity_error = abs(float(state[3]) - current_v)
+                angular_error = abs(float(state[4]) - current_w)
+                cost = (
+                    position_error
+                    + 0.15 * heading_error
+                    + 0.10 * velocity_error
+                    + 0.03 * angular_error
+                )
+                candidate = (cost, index, position_error, heading_error)
+                if best is None or candidate < best:
+                    best = candidate
+
+            if best is None:
+                return 0.0
+            _, index, position_error, heading_error = best
+            self.last_projected_alignment_position_error = position_error
+            self.last_projected_alignment_heading_error = heading_error
+            max_position_error = max(
+                0.0,
+                float(self.get_parameter("projected_alignment_max_position_error").value),
+            )
+            if position_error > max_position_error:
+                return 0.0
+
+            offset = float(index) * dt
+            self.last_projected_alignment_success = True
+            self.last_projected_alignment_offset_sec = offset
+            return offset
+        except Exception as exc:
+            self.get_logger().warn(
+                f"projected trajectory state alignment failed; starting at t=0: "
+                f"{type(exc).__name__}: {exc}"
+            )
+            return 0.0
 
     def set_latest_policy_cmd(
         self,
@@ -2522,17 +2513,24 @@ class PolicyCmdVelNode(Node):
         stamp: float,
         duration_sec: float,
         projected_trajectory: Optional[Dict[str, Any]] = None,
+        trajectory_origin_stamp: Optional[float] = None,
+        trajectory_start_offset_sec: float = 0.0,
+        trajectory_alignment_success: bool = False,
     ):
+        origin_stamp = stamp if trajectory_origin_stamp is None else trajectory_origin_stamp
         with self._inference_lock:
             self._latest_policy_cmd = {
                 "v": float(v),
                 "w": float(w),
                 "stamp": float(stamp),
+                "trajectory_origin_stamp": float(origin_stamp),
                 "duration_sec": float(duration_sec),
                 "projected_trajectory": projected_trajectory,
+                "trajectory_start_offset_sec": float(trajectory_start_offset_sec),
+                "trajectory_alignment_success": bool(trajectory_alignment_success),
             }
 
-    def get_latest_policy_cmd(self) -> Optional[Dict[str, float]]:
+    def get_latest_policy_cmd(self) -> Optional[Dict[str, Any]]:
         with self._inference_lock:
             return dict(self._latest_policy_cmd) if self._latest_policy_cmd is not None else None
 
@@ -2616,23 +2614,37 @@ class PolicyCmdVelNode(Node):
         if cmd is None:
             self.publish_zero("waiting for first diffusion command")
             return
-        age = now - cmd["stamp"]
+        command_age = max(0.0, now - float(cmd["stamp"]))
+        trajectory_origin_stamp = float(cmd.get("trajectory_origin_stamp", cmd["stamp"]))
+        latency_compensation_enabled = bool(
+            self.get_parameter("enable_projected_trajectory_latency_compensation").value
+        )
+        alignment_success = bool(cmd.get("trajectory_alignment_success", False))
+        alignment_offset = max(0.0, float(cmd.get("trajectory_start_offset_sec", 0.0)))
+        if alignment_success:
+            trajectory_age = alignment_offset + command_age
+        elif latency_compensation_enabled:
+            trajectory_age = max(0.0, now - trajectory_origin_stamp)
+        else:
+            trajectory_age = command_age
+        self.last_projected_trajectory_execution_age_sec = trajectory_age
         effective_timeout = max(
             self.command_hold_timeout,
             cmd["duration_sec"] + self.diffusion_inference_period + self.cmd_publish_period,
         )
-        if age > effective_timeout:
-            self.publish_zero(f"held diffusion command timeout: {age:.2f}s > {effective_timeout:.2f}s")
+        if command_age > effective_timeout:
+            self.publish_zero(f"held diffusion command timeout: {command_age:.2f}s > {effective_timeout:.2f}s")
             return
 
-        sampled_cmd = self.sample_projected_policy_cmd(cmd, age)
+        sampled_cmd = self.sample_projected_policy_cmd(cmd, trajectory_age)
         if sampled_cmd is not None:
             v = sampled_cmd["v"]
             w = sampled_cmd["w"]
             if now - self._last_hold_log_time > 1.0:
                 self.get_logger().info(
                     f"publishing sampled projected trajectory command: v={v:.3f}, w={w:.3f}, "
-                    f"sample_t={sampled_cmd['sample_time_sec']:.3f}s, age={age:.2f}s, "
+                    f"sample_t={sampled_cmd['sample_time_sec']:.3f}s, result_age={command_age:.2f}s, "
+                    f"trajectory_age={trajectory_age:.2f}s, "
                     f"horizon={self.last_projected_trajectory_horizon_sec:.2f}s, "
                     f"inference duration={cmd['duration_sec']:.3f}s"
                 )
@@ -2648,7 +2660,7 @@ class PolicyCmdVelNode(Node):
         if now - self._last_hold_log_time > 1.0:
             self.get_logger().info(
                 f"republishing held diffusion command: v={cmd['v']:.3f}, w={cmd['w']:.3f}, "
-                f"age={age:.2f}s, inference duration={cmd['duration_sec']:.3f}s, "
+                f"result_age={command_age:.2f}s, trajectory_age={trajectory_age:.2f}s, inference duration={cmd['duration_sec']:.3f}s, "
                 f"effective timeout={effective_timeout:.2f}s, "
                 f"projected fallback={self.last_projected_trajectory_fallback_reason}"
             )
@@ -2657,20 +2669,18 @@ class PolicyCmdVelNode(Node):
         self.publish_cmd(cmd["v"], cmd["w"])
 
     def diffusion_inference_callback(self):
-        if self._shutdown_event.is_set():
-            return
         if not (self.use_diffusion_policy and self.diffusion_adapter is not None):
             return
         if not self.policy_ready_for_goal:
             return
         with self._inference_lock:
-            if self._shutdown_event.is_set() or self._diffusion_inference_running:
+            if self._diffusion_inference_running:
                 return
             self._diffusion_inference_running = True
 
         now = self.now_sec()
         inputs, stop_reason = self.prepare_policy_inputs(now)
-        if stop_reason is not None or self._shutdown_event.is_set():
+        if stop_reason is not None:
             with self._inference_lock:
                 self._diffusion_inference_running = False
             return
@@ -2683,7 +2693,7 @@ class PolicyCmdVelNode(Node):
 
         self._diffusion_thread = threading.Thread(
             target=self.run_diffusion_inference,
-            args=(robot, people, goal, occupancy, last_cmd, limits, goal_generation),
+            args=(robot, people, goal, occupancy, last_cmd, limits, goal_generation, now),
             daemon=True,
         )
         self._diffusion_thread.start()
@@ -2697,19 +2707,20 @@ class PolicyCmdVelNode(Node):
         last_cmd: Dict[str, float],
         limits: Dict[str, float],
         goal_generation: int,
+        trajectory_origin_stamp: float,
     ):
         start_wall = time.perf_counter()
         try:
             v, w = self.diffusion_adapter.compute_action(robot, people, goal, occupancy, last_cmd, limits)
-            if self._shutdown_event.is_set():
-                return
             self.last_raw_action_type = self.diffusion_adapter.last_action_type
             self.last_policy_state_after_sync = dict(self.diffusion_adapter.last_policy_state_after_sync)
             self.last_raw_model_v_before_conversion = self.diffusion_adapter.last_raw_model_v
             self.last_raw_model_r_or_w_before_conversion = self.diffusion_adapter.last_raw_model_r_or_w
             with self._goal_lock:
                 result_is_stale = (
-                    goal_generation != self._goal_generation or self.latest_goal is None
+                    goal_generation != self._goal_generation
+                    or self.latest_goal is None
+                    or self.human_wait_active
                 )
             if result_is_stale:
                 self.diffusion_adapter.reset_policy_state()
@@ -2727,10 +2738,19 @@ class PolicyCmdVelNode(Node):
             duration = time.perf_counter() - start_wall
             projected_trajectory = self.diffusion_adapter.projected_trajectory_for_command()
             predicted_trajectory = self.diffusion_adapter.predicted_trajectory_for_command()
-            if self._shutdown_event.is_set():
-                return
             result_stamp = self.now_sec()
+            self.last_projected_trajectory_input_stamp_sec = float(trajectory_origin_stamp)
+            self.last_projected_trajectory_result_stamp_sec = float(result_stamp)
+            self.last_projected_trajectory_latency_compensation_sec = max(
+                0.0, float(result_stamp) - float(trajectory_origin_stamp)
+            )
             self.last_projected_trajectory_available = projected_trajectory is not None
+            alignment_offset = self.align_projected_trajectory_start(
+                projected_trajectory,
+                robot,
+                self.last_projected_trajectory_latency_compensation_sec,
+            )
+            alignment_success = self.last_projected_alignment_success
             if projected_trajectory is not None:
                 self.last_projected_trajectory_horizon_sec = float(
                     projected_trajectory.get("horizon_sec", float("nan"))
@@ -2751,7 +2771,12 @@ class PolicyCmdVelNode(Node):
                 result_stamp,
                 self.last_projected_trajectory_dt,
             )
-            self.set_latest_policy_cmd(v, w, result_stamp, duration, projected_trajectory)
+            self.set_latest_policy_cmd(
+                v, w, result_stamp, duration, projected_trajectory,
+                trajectory_origin_stamp=trajectory_origin_stamp,
+                trajectory_start_offset_sec=alignment_offset,
+                trajectory_alignment_success=alignment_success,
+            )
             now = result_stamp
             if now - self._last_source_log_time > 1.0:
                 self.get_logger().info(
@@ -2761,12 +2786,11 @@ class PolicyCmdVelNode(Node):
                 )
                 self._last_source_log_time = now
         except Exception as exc:
-            if not self._shutdown_event.is_set():
-                self.clear_trajectory_paths()
-                self.get_logger().error(
-                    f"diffusion inference failed; holding previous command until timeout: {type(exc).__name__}: {exc}\n"
-                    f"{traceback.format_exc()}"
-                )
+            self.clear_trajectory_paths()
+            self.get_logger().error(
+                f"diffusion inference failed; holding previous command until timeout: {type(exc).__name__}: {exc}\n"
+                f"{traceback.format_exc()}"
+            )
         finally:
             with self._inference_lock:
                 self._diffusion_inference_running = False
@@ -2780,7 +2804,6 @@ def main(args=None):
     except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
-        node.prepare_for_shutdown()
         if rclpy.ok():
             node.clear_trajectory_paths()
             node.publish_cmd(0.0, 0.0)

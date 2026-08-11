@@ -41,6 +41,7 @@ def generate_launch_description():
         package='social_nav_diffusion_ros',
         executable='policy_cmd_vel_node',
         name='policy_cmd_vel_node',
+        prefix='/home/ubuntu/social_nav_diffusion_humble_venv/bin/python ',
         output='screen',
         condition=IfCondition(start_policy),
         remappings=[*tf_remaps, ('/map', map_topic)],
@@ -48,7 +49,7 @@ def generate_launch_description():
             PathJoinSubstitution([
                 package_share,
                 'config',
-                'angular_half_eval.yaml',
+                'test_speed_control.yaml',
             ]),
             PathJoinSubstitution([
                 package_share,
@@ -75,7 +76,7 @@ def generate_launch_description():
             PathJoinSubstitution([
                 package_share,
                 'config',
-                'angular_half_eval.yaml',
+                'test_speed_control.yaml',
             ]),
             PathJoinSubstitution([
                 package_share,
@@ -107,7 +108,7 @@ def generate_launch_description():
         DeclareLaunchArgument('start_goal_bridge', default_value='true'),
         DeclareLaunchArgument('start_rviz', default_value='true'),
         DeclareLaunchArgument('map_topic', default_value='/map'),
-        SetEnvironmentVariable('SOCIAL_NAV_DIFFUSION_USE_VENV', 'true'),
+        SetEnvironmentVariable('SOCIAL_NAV_DIFFUSION_USE_VENV', 'false'),
         SetEnvironmentVariable(
             'SOCIAL_NAV_DIFFUSION_VENV',
             '/home/ubuntu/social_nav_diffusion_humble_venv',

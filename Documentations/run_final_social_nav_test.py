@@ -302,7 +302,7 @@ ros2 launch clearpath_nav2_demos slam.launch.py \
 {ROS_ENV}
 export SOCIAL_NAV_DIFFUSION_USE_VENV=true
 ros2 launch social_nav_diffusion_ros jackal_pipeline.launch.py \
-  params_file:=/home/ubuntu/waterloo_jackal_pipeline_repo/install/social_nav_diffusion_ros/share/social_nav_diffusion_ros/config/angular_half_eval.yaml \
+  params_file:=/home/ubuntu/waterloo_jackal_pipeline_repo/install/social_nav_diffusion_ros/share/social_nav_diffusion_ros/config/test_speed_control.yaml \
   topics_file:=/home/ubuntu/waterloo_jackal_pipeline_repo/install/social_nav_diffusion_ros/share/social_nav_diffusion_ros/config/topics_sim.yaml \
   use_sim_time:=true \
   use_diffusion_policy:=true
