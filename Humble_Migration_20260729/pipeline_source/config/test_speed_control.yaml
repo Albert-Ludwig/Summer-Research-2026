@@ -15,13 +15,6 @@ policy_cmd_vel_node:
     robot_v_pref: 1.0
     robot_radius: 0.25
     human_radius: 0.25
-    execution_robot_radius: 0.25
-    execution_human_radius: 0.40
-    enable_human_wait: true
-    human_wait_trigger_distance: 0.75
-    human_wait_release_distance: 0.90
-    human_wait_front_half_width: 0.80
-    human_wait_release_hold_sec: 0.50
     projected_alignment_max_position_error: 0.45
     sync_policy_warm_start_from_odom: true
     sync_prev_action_from_odom: true

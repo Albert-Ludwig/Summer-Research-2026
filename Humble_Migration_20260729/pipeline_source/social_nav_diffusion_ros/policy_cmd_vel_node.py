@@ -601,13 +601,6 @@ class PolicyCmdVelNode(Node):
         self.declare_parameter("robot_v_pref", 1.0)
         self.declare_parameter("robot_radius", 0.25)
         self.declare_parameter("human_radius", 0.25)
-        self.declare_parameter("execution_robot_radius", 0.25)
-        self.declare_parameter("execution_human_radius", 0.40)
-        self.declare_parameter("enable_human_wait", False)
-        self.declare_parameter("human_wait_trigger_distance", 0.70)
-        self.declare_parameter("human_wait_release_distance", 0.85)
-        self.declare_parameter("human_wait_front_half_width", 0.80)
-        self.declare_parameter("human_wait_release_hold_sec", 0.50)
         self.declare_parameter("projected_alignment_max_position_error", 0.45)
         self.declare_parameter("sync_policy_warm_start_from_odom", True)
         self.declare_parameter("sync_prev_action_from_odom", True)
@@ -778,13 +771,6 @@ class PolicyCmdVelNode(Node):
         self.bridge_goal_republish_count = 0
         self.last_goal_distance_frame = self.target_policy_frame
         self.last_goal_distance_tf_success = False
-        self.human_wait_active = False
-        self.human_wait_entry_count = 0
-        self.human_wait_started_at: Optional[float] = None
-        self.human_wait_clear_since: Optional[float] = None
-        self.last_human_wait_duration_sec = 0.0
-        self.last_human_min_distance = float("nan")
-        self.last_human_blocking_distance = float("nan")
         self.last_projected_alignment_success = False
         self.last_projected_alignment_offset_sec = 0.0
         self.last_projected_alignment_position_error = float("nan")
@@ -1244,7 +1230,6 @@ class PolicyCmdVelNode(Node):
 
     def _accept_new_goal_locked(self, msg: PoseStamped):
         self._goal_generation += 1
-        self.reset_human_wait_state()
         self.latest_goal = copy.deepcopy(msg)
         if not self.latest_goal.header.frame_id:
             self.latest_goal.header.frame_id = "map"
@@ -1367,107 +1352,6 @@ class PolicyCmdVelNode(Node):
         self.last_projected_alignment_offset_sec = 0.0
         self.last_projected_alignment_position_error = float("nan")
         self.last_projected_alignment_heading_error = float("nan")
-
-    def reset_human_wait_state(self):
-        self.human_wait_active = False
-        self.human_wait_started_at = None
-        self.human_wait_clear_since = None
-        self.last_human_wait_duration_sec = 0.0
-        self.last_human_blocking_distance = float("nan")
-
-    def human_wait_safety_distance(self) -> float:
-        return max(
-            0.0,
-            float(self.get_parameter("execution_robot_radius").value)
-            + float(self.get_parameter("execution_human_radius").value),
-        )
-
-    def update_human_wait_state(
-        self,
-        robot: Dict[str, float],
-        people: List[Dict[str, float]],
-        now: float,
-        people_stale: bool,
-    ) -> bool:
-        distances = [float(person["distance"]) for person in people]
-        self.last_human_min_distance = min(distances) if distances else float("nan")
-
-        if not bool(self.get_parameter("enable_human_wait").value):
-            self.reset_human_wait_state()
-            return False
-
-        safety_distance = self.human_wait_safety_distance()
-        trigger_distance = max(
-            safety_distance,
-            float(self.get_parameter("human_wait_trigger_distance").value),
-        )
-        release_distance = max(
-            trigger_distance + 1e-3,
-            float(self.get_parameter("human_wait_release_distance").value),
-        )
-        front_half_width = max(
-            0.0, float(self.get_parameter("human_wait_front_half_width").value)
-        )
-
-        if self.human_wait_active:
-            if self.human_wait_started_at is not None:
-                self.last_human_wait_duration_sec = max(0.0, now - self.human_wait_started_at)
-            clear = (not people_stale) and all(distance >= release_distance for distance in distances)
-            if clear:
-                if self.human_wait_clear_since is None:
-                    self.human_wait_clear_since = now
-                hold_sec = max(
-                    0.0, float(self.get_parameter("human_wait_release_hold_sec").value)
-                )
-                if now - self.human_wait_clear_since >= hold_sec:
-                    duration = self.last_human_wait_duration_sec
-                    with self._goal_lock:
-                        if not self.human_wait_active:
-                            return False
-                        self.human_wait_active = False
-                        self.human_wait_started_at = None
-                        self.human_wait_clear_since = None
-                        self.last_human_blocking_distance = float("nan")
-                        self._goal_generation += 1
-                        self.invalidate_policy_command_state()
-                    self.get_logger().info(
-                        f"human clearance restored after {duration:.2f}s; replanning from odometry"
-                    )
-            else:
-                self.human_wait_clear_since = None
-            return self.human_wait_active
-
-        if people_stale:
-            return False
-
-        blocking = [
-            person for person in people
-            if float(person["rel_x"]) >= 0.0
-            and abs(float(person["rel_y"])) <= front_half_width
-            and float(person["distance"]) <= trigger_distance
-        ]
-        if not blocking:
-            self.last_human_blocking_distance = float("nan")
-            return False
-
-        blocking_distance = min(float(person["distance"]) for person in blocking)
-        with self._goal_lock:
-            if self.human_wait_active:
-                return True
-            self.human_wait_active = True
-            self.human_wait_entry_count += 1
-            self.human_wait_started_at = now
-            self.human_wait_clear_since = None
-            self.last_human_wait_duration_sec = 0.0
-            self.last_human_blocking_distance = blocking_distance
-            self._goal_generation += 1
-            self.invalidate_policy_command_state()
-        self.get_logger().warn(
-            "human safety wait entered: "
-            f"distance={blocking_distance:.3f}m, trigger={trigger_distance:.3f}m, "
-            f"hard_clearance={safety_distance:.3f}m"
-        )
-        return True
 
     def remember_goal_debug(self, goal: Dict[str, float]):
         self.last_policy_goal_x_map = float(goal["x"])
@@ -1819,8 +1703,6 @@ class PolicyCmdVelNode(Node):
             return "zero_goal_reached"
         if "no goal" in reason_lower:
             return "no_goal"
-        if "waiting for human clearance" in reason_lower:
-            return "zero_human_wait"
         if "waiting for first diffusion" in reason_lower:
             return "diffusion"
         if "placeholder" in reason_lower:
@@ -2088,17 +1970,6 @@ class PolicyCmdVelNode(Node):
             "robot_v_pref": float(self.get_parameter("robot_v_pref").value),
             "robot_radius": float(self.get_parameter("robot_radius").value),
             "human_radius": float(self.get_parameter("human_radius").value),
-            "execution_robot_radius": float(self.get_parameter("execution_robot_radius").value),
-            "execution_human_radius": float(self.get_parameter("execution_human_radius").value),
-            "human_safety_center_distance": self.human_wait_safety_distance(),
-            "enable_human_wait": bool(self.get_parameter("enable_human_wait").value),
-            "human_wait_active": self.human_wait_active,
-            "human_wait_entry_count": self.human_wait_entry_count,
-            "human_wait_duration_sec": self.last_human_wait_duration_sec,
-            "human_wait_min_distance": self.last_human_min_distance,
-            "human_wait_blocking_distance": self.last_human_blocking_distance,
-            "human_wait_trigger_distance": float(self.get_parameter("human_wait_trigger_distance").value),
-            "human_wait_release_distance": float(self.get_parameter("human_wait_release_distance").value),
             "odom_linear_velocity_used_for_sync": self.last_odom_linear_velocity_used_for_sync,
             "odom_angular_velocity_used_for_sync": self.last_odom_angular_velocity_used_for_sync,
             "policy_time_step": float(getattr(self.diffusion_adapter.policy, "time_step", float("nan"))) if self.diffusion_adapter is not None else float("nan"),
@@ -2362,7 +2233,6 @@ class PolicyCmdVelNode(Node):
         if self._goal_reached_handled:
             return
         self._goal_generation += 1
-        self.reset_human_wait_state()
         if bool(self.get_parameter("reset_policy_state_on_goal_reached").value):
             self.reset_policy_state("goal_reached")
         else:
@@ -2373,7 +2243,6 @@ class PolicyCmdVelNode(Node):
 
     def handle_goal_timeout(self):
         self._goal_generation += 1
-        self.reset_human_wait_state()
         self.invalidate_policy_command_state()
         self.latest_goal = None
         self.latest_goal_time = None
@@ -2426,9 +2295,6 @@ class PolicyCmdVelNode(Node):
         if enable_goal_stop and stop_when_goal_reached and goal["distance"] <= float(self.get_parameter("goal_tolerance").value):
             self.handle_goal_reached()
             return None, "goal reached"
-
-        if self.update_human_wait_state(robot, people_seen, now, people_stale):
-            return None, "waiting for human clearance"
 
         return (robot, people, goal, occupancy), None
 
@@ -2720,7 +2586,6 @@ class PolicyCmdVelNode(Node):
                 result_is_stale = (
                     goal_generation != self._goal_generation
                     or self.latest_goal is None
-                    or self.human_wait_active
                 )
             if result_is_stale:
                 self.diffusion_adapter.reset_policy_state()

@@ -500,3 +500,19 @@ http://127.0.0.1:6084/vnc.html?autoconnect=1&resize=scale
 - Sent a real RViz Nav2 Goal. The Jackal moved correctly and reached the expected position.
 - Stopped by publishing zero velocity and shutting down policy, adapter, detector, RViz, and onboard localization. No test process remained.
 - Known behavior for the next tuning pass: obstacle avoidance can produce circling and goal overshoot. This baseline is preserved before any tuning changes.
+
+## 2026-08-11 Real Test And Human-Wait Removal
+
+- Jazzy and Humble used the same `policy_cmd_vel_node.py` and `test_speed_control.yaml` control files.
+- The real Jackal reached the RViz goal and stopped normally at `0.249 m`, within the configured `0.25 m` tolerance.
+- Diffusion produced commands up to `1.0 m/s`; acados projection returned `status=0`.
+- The final LiDAR adapter slowed commands between `1.0 m` and `0.55 m` and stopped inside `0.55 m`. It also stopped when LiDAR or odometry became stale.
+- The obstacle used for this test was a chair. YOLO is configured with `classes=[0]`, so it detects only people; a chair does not enter `/people` and is not a valid human-avoidance test.
+- `/people` repeatedly became stale. A later eight-second check received no `/people_detector/status`; fix RGB-D/TF publication continuity before evaluating human avoidance.
+- Do not disable LiDAR fail-closed protection. The proposed next change is to make live LiDAR obstacles visible to Diffusion and permit safe turn-away commands instead of using the adapter only as a stop layer. This proposal was not implemented today.
+- Removed the obsolete forced `human_wait` parameters, state machine, result invalidation, and debug fields from the persistent source and both containers. Diffusion human handling remains active through `robot_radius=0.25` and `human_radius=0.25`.
+- Preserved goal stopping, command/odom/LiDAR timeout stopping, emergency-stop gating, and LiDAR collision protection.
+- Humble and Jazzy syntax checks and `social_nav_diffusion_ros` builds passed.
+- Final matching hashes: policy `866e46004e66665b1f3fad459ca00e776cdc9748431ac7909eacca508d9f0e80`; YAML `dbf2688c4b19ed872a32fb6d7fb0eb8e5ecd2f5414946a66aa1c970aef15d36b`.
+- Changes are not committed. Modified persistent files are under `Humble_Migration_20260729/pipeline_source/`.
+- The real test stack, onboard launcher-managed localization, `jackal_robohub`, and `ros_vnc_jazzy_gpu_full` are stopped.
