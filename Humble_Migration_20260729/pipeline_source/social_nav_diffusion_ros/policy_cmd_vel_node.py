@@ -754,7 +754,6 @@ class PolicyCmdVelNode(Node):
         self.declare_parameter("robot_goal_topic", "/cpr_j100_0001/goal_pose")
         self.declare_parameter("cmd_vel_topic", "/cpr_j100_0001/cmd_vel")
         self.declare_parameter("active_goal_marker_topic", "/social_nav_diffusion/active_goal_marker")
-        self.declare_parameter("goal_path_topic", "/social_nav_diffusion/goal_path")
         self.declare_parameter("projected_trajectory_topic", "/social_nav_diffusion/projected_trajectory")
         self.declare_parameter("predicted_trajectory_topic", "/social_nav_diffusion/predicted_trajectory")
         self.declare_parameter("policy_debug_topic", "/social_nav_diffusion/policy_debug")
@@ -816,7 +815,6 @@ class PolicyCmdVelNode(Node):
         self.robot_goal_topic = str(self.get_parameter("robot_goal_topic").value)
         self.cmd_vel_topic = str(self.get_parameter("cmd_vel_topic").value)
         self.active_goal_marker_topic = str(self.get_parameter("active_goal_marker_topic").value)
-        self.goal_path_topic = str(self.get_parameter("goal_path_topic").value)
         self.projected_trajectory_topic = str(self.get_parameter("projected_trajectory_topic").value)
         self.predicted_trajectory_topic = str(self.get_parameter("predicted_trajectory_topic").value)
         self.policy_debug_topic = str(self.get_parameter("policy_debug_topic").value)
@@ -1010,7 +1008,6 @@ class PolicyCmdVelNode(Node):
 
         self.cmd_pub = self.create_publisher(TwistStamped, self.cmd_vel_topic, 10)
         self.active_goal_marker_pub = self.create_publisher(Marker, self.active_goal_marker_topic, 10)
-        self.goal_path_pub = self.create_publisher(Path, self.goal_path_topic, 10)
         self.projected_trajectory_pub = self.create_publisher(Path, self.projected_trajectory_topic, 10)
         self.predicted_trajectory_pub = self.create_publisher(Path, self.predicted_trajectory_topic, 10)
         self.policy_debug_pub = self.create_publisher(String, self.policy_debug_topic, 10)
@@ -2007,38 +2004,6 @@ class PolicyCmdVelNode(Node):
         marker.color.b = 1.0
         marker.color.a = 0.9
         self.active_goal_marker_pub.publish(marker)
-
-        if self.latest_odom is None:
-            return
-
-        odom_frame = str(self.get_parameter("odom_pose_source_frame_override").value) or self.latest_odom.header.frame_id or self.target_policy_frame
-        try:
-            robot_x, robot_y = self.transform_xy_to_target(
-                self.latest_odom.pose.pose.position.x, self.latest_odom.pose.pose.position.y, odom_frame, "tf_robot_to_target_success"
-            )
-        except TransformException:
-            return
-
-        path = Path()
-        path.header.stamp = stamp
-        path.header.frame_id = self.target_policy_frame
-
-        start = PoseStamped()
-        start.header = path.header
-        start.pose.position.x = float(robot_x)
-        start.pose.position.y = float(robot_y)
-        start.pose.position.z = float(self.latest_odom.pose.pose.position.z)
-        start.pose.orientation.w = 1.0
-
-        end = PoseStamped()
-        end.header = path.header
-        end.pose.position.x = float(goal_x)
-        end.pose.position.y = float(goal_y)
-        end.pose.position.z = float(self.latest_goal.pose.position.z)
-        end.pose.orientation = self.latest_goal.pose.orientation
-
-        path.poses = [start, end]
-        self.goal_path_pub.publish(path)
 
     def time_msg_from_sec(self, seconds: float):
         nanoseconds = max(0, int(float(seconds) * 1e9))

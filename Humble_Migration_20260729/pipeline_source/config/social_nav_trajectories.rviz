@@ -114,24 +114,6 @@ Visualization Manager:
         Reliability Policy: Reliable
         Value: /social_nav_diffusion/predicted_trajectory
       Value: true
-    - Class: rviz_default_plugins/Path
-      Color: 80; 170; 255
-      Enabled: true
-      Line Style: Lines
-      Line Width: 0.015
-      Name: Goal Reference Line
-      Offset:
-        X: 0
-        Y: 0
-        Z: 0.02
-      Pose Style: None
-      Topic:
-        Depth: 5
-        Durability Policy: Volatile
-        History Policy: Keep Last
-        Reliability Policy: Reliable
-        Value: /social_nav_diffusion/goal_path
-      Value: true
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48

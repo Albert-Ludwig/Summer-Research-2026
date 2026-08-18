@@ -117,6 +117,26 @@ def run_checked(command: list[str]) -> None:
         )
 
 
+def ensure_wsl_jackal_route() -> None:
+    script = (
+        "ip -o -4 addr show dev eth0 | "
+        "grep -q 'inet 192.168.131.101/24'; "
+        "ip route replace 192.168.131.1/32 dev eth0 "
+        "src 192.168.131.101 metric 5"
+    )
+    run_checked([
+        "wsl",
+        "-d",
+        WSL_DISTRO,
+        "-u",
+        "root",
+        "--",
+        "bash",
+        "-lc",
+        script,
+    ])
+
+
 def wait_for_vnc(timeout_sec: float = 40.0) -> bool:
     deadline = time.monotonic() + timeout_sec
     while time.monotonic() < deadline:
@@ -182,6 +202,24 @@ def run_jackal_checked(
 
 
 def sync_jackal_time(password: str) -> None:
+    probe = subprocess.run(
+        jackal_ssh_command(password, "date -u +%s.%N"),
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if probe.returncode == 0:
+        matches = re.findall(r"(?m)^(\d+\.\d+)$", probe.stdout.strip())
+        if matches:
+            skew = float(matches[-1]) - time.time()
+            if abs(skew) <= 0.5:
+                print(
+                    f"[host] Jackal clock already synchronized "
+                    f"(skew={skew:+.3f} s).",
+                    flush=True,
+                )
+                return
+
     script = f"""set -e
 target=$(date -u +%s.%N)
 printf '%s\\n' "$SSHPASS" | sshpass -e ssh \\
@@ -209,6 +247,16 @@ printf '%s\\n' "$SSHPASS" | sshpass -e ssh \\
     )
     if result.returncode == 0:
         print("[host] Jackal time synchronized over SSH.", flush=True)
+        restart_command = (
+            f"printf '%s\\n' {shlex.quote(password)} | "
+            "sudo -S systemctl restart clearpath-platform.service"
+        )
+        run_jackal_checked(
+            password,
+            restart_command,
+            "Restart Jackal platform after clock adjustment",
+        )
+        time.sleep(5)
         return
     detail = (result.stderr or result.stdout).strip()
     print(
@@ -249,11 +297,14 @@ def enable_jackal_rgbd(password: str) -> None:
         f"cd {shlex.quote(JACKAL_WORKSPACE)}; "
         "source install/setup.bash; "
         "export ROS_SUPER_CLIENT=True; "
-        f"ROS2CLI_NO_DAEMON=1 ros2 param set {node} enable_depth true; "
-        "sleep 2; "
-        f"ROS2CLI_NO_DAEMON=1 ros2 param set {node} enable_sync true; "
-        f"ROS2CLI_NO_DAEMON=1 ros2 param set {node} "
-        "align_depth.enable true"
+        "for attempt in $(seq 1 12); do "
+        f"if ROS2CLI_NO_DAEMON=1 ros2 param set {node} enable_depth true "
+        "&& sleep 1 "
+        f"&& ROS2CLI_NO_DAEMON=1 ros2 param set {node} enable_sync true "
+        f"&& ROS2CLI_NO_DAEMON=1 ros2 param set {node} "
+        "align_depth.enable true; then exit 0; fi; "
+        "sleep 1; done; "
+        f"echo 'Timed out waiting for {node}' >&2; exit 1"
     )
     run_jackal_checked(
         password,
@@ -479,6 +530,7 @@ def run_from_windows(args: argparse.Namespace) -> int:
     remote_log_path: Optional[Path] = None
     child: Optional[subprocess.Popen] = None
     run_checked(start_docker)
+    ensure_wsl_jackal_route()
     sync_jackal_time(password)
     preflight_jackal_localization(password, args.map_file)
     run_checked(start_container)

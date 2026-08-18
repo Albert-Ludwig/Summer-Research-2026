@@ -24,3 +24,12 @@ rgbd_people_detector:
     track_timeout_sec: 0.75
     velocity_smoothing: 0.50
     tf_timeout_sec: 0.15
+    enable_lidar_fusion: true
+    lidar_topic: /jackal1/sensors/lidar3d_0/scan
+    lidar_fusion_period_sec: 0.10
+    lidar_association_radius_m: 0.55
+    lidar_min_points: 2
+    lidar_track_hold_sec: 1.50
+    lidar_position_smoothing: 0.25
+    lidar_velocity_smoothing: 0.25
+    lidar_max_prediction_sec: 0.50

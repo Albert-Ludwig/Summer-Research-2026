@@ -8,7 +8,6 @@ policy_cmd_vel_node:
     robot_goal_topic: /jackal1/goal_pose
     cmd_vel_topic: /debug_cmd_vel
     active_goal_marker_topic: /social_nav_diffusion/active_goal_marker
-    goal_path_topic: /social_nav_diffusion/goal_path
     policy_debug_topic: /social_nav_diffusion/policy_debug
     cmd_frame_id: base_link
     target_policy_frame: map

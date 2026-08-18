@@ -49,7 +49,7 @@ from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from rclpy.time import Time
-from sensor_msgs.msg import CameraInfo, Image
+from sensor_msgs.msg import CameraInfo, Image, LaserScan
 from std_msgs.msg import String
 from tf2_ros import Buffer, TransformException, TransformListener
 from visualization_msgs.msg import Marker, MarkerArray
@@ -74,6 +74,8 @@ class Track:
     score: float
     last_seen: float
     last_seen_receive: float
+    camera_confirmed_receive: Optional[float] = None
+    last_lidar_receive: Optional[float] = None
 
 
 def stamp_to_seconds(stamp) -> float:
@@ -145,12 +147,113 @@ def fresh_tracks(
     tracks: Dict[int, Track],
     now_sec: float,
     timeout_sec: float,
+    camera_timeout_sec: Optional[float] = None,
 ) -> Dict[int, Track]:
-    return {
-        track_id: track
-        for track_id, track in tracks.items()
-        if now_sec - track.last_seen_receive <= timeout_sec
-    }
+    fresh = {}
+    for track_id, track in tracks.items():
+        if now_sec - track.last_seen_receive > timeout_sec:
+            continue
+        camera_receive = (
+            track.camera_confirmed_receive
+            if track.camera_confirmed_receive is not None
+            else track.last_seen_receive
+        )
+        if (
+            camera_timeout_sec is not None
+            and now_sec - camera_receive > camera_timeout_sec
+        ):
+            continue
+        fresh[track_id] = track
+    return fresh
+
+
+def laser_points_in_target(
+    ranges: Sequence[float],
+    angle_min: float,
+    angle_increment: float,
+    range_min: float,
+    range_max: float,
+    transform,
+) -> np.ndarray:
+    values = np.asarray(ranges, dtype=np.float64)
+    indices = np.arange(values.size, dtype=np.float64)
+    valid = (
+        np.isfinite(values)
+        & (values >= float(range_min))
+        & (values <= float(range_max))
+    )
+    if not np.any(valid):
+        return np.empty((0, 2), dtype=np.float64)
+
+    angles = float(angle_min) + indices[valid] * float(angle_increment)
+    distances = values[valid]
+    points = np.column_stack((
+        distances * np.cos(angles),
+        distances * np.sin(angles),
+        np.zeros(distances.size, dtype=np.float64),
+    ))
+    rotation = transform.transform.rotation
+    axis = np.asarray(
+        [rotation.x, rotation.y, rotation.z],
+        dtype=np.float64,
+    )
+    rotated = (
+        points
+        + 2.0 * float(rotation.w) * np.cross(axis, points)
+        + 2.0 * np.cross(axis, np.cross(axis, points))
+    )
+    translation = transform.transform.translation
+    rotated[:, 0] += float(translation.x)
+    rotated[:, 1] += float(translation.y)
+    return rotated[:, :2]
+
+
+def associate_lidar_points(
+    points_xy: np.ndarray,
+    tracks: Sequence[Track],
+    stamp_sec: float,
+    radius_m: float,
+    min_points: int,
+    max_prediction_sec: float,
+) -> Dict[int, Tuple[float, float, int]]:
+    if points_xy.size == 0 or not tracks:
+        return {}
+
+    predictions = []
+    for track in tracks:
+        prediction_dt = min(
+            max(0.0, float(stamp_sec) - track.last_seen),
+            max(0.0, float(max_prediction_sec)),
+        )
+        predictions.append((
+            track.x + track.vx * prediction_dt,
+            track.y + track.vy * prediction_dt,
+        ))
+    predicted_xy = np.asarray(predictions, dtype=np.float64)
+    offsets = points_xy[:, None, :] - predicted_xy[None, :, :]
+    distance_sq = np.sum(offsets * offsets, axis=2)
+    nearest_track = np.argmin(distance_sq, axis=1)
+    nearest_distance_sq = distance_sq[
+        np.arange(points_xy.shape[0]),
+        nearest_track,
+    ]
+    radius_sq = float(radius_m) ** 2
+
+    associations = {}
+    for track_index, track in enumerate(tracks):
+        assigned = points_xy[
+            (nearest_track == track_index)
+            & (nearest_distance_sq <= radius_sq)
+        ]
+        if assigned.shape[0] < int(min_points):
+            continue
+        median = np.median(assigned, axis=0)
+        associations[track.track_id] = (
+            float(median[0]),
+            float(median[1]),
+            int(assigned.shape[0]),
+        )
+    return associations
 
 
 class RgbdPeopleDetector(Node):
@@ -193,6 +296,18 @@ class RgbdPeopleDetector(Node):
         self.declare_parameter('track_timeout_sec', 0.75)
         self.declare_parameter('velocity_smoothing', 0.50)
         self.declare_parameter('tf_timeout_sec', 0.15)
+        self.declare_parameter('enable_lidar_fusion', True)
+        self.declare_parameter(
+            'lidar_topic',
+            '/jackal1/sensors/lidar3d_0/scan',
+        )
+        self.declare_parameter('lidar_fusion_period_sec', 0.10)
+        self.declare_parameter('lidar_association_radius_m', 0.55)
+        self.declare_parameter('lidar_min_points', 2)
+        self.declare_parameter('lidar_track_hold_sec', 1.50)
+        self.declare_parameter('lidar_position_smoothing', 0.25)
+        self.declare_parameter('lidar_velocity_smoothing', 0.25)
+        self.declare_parameter('lidar_max_prediction_sec', 0.50)
 
         self.color_topic = str(self.get_parameter('color_topic').value)
         self.depth_topic = str(self.get_parameter('depth_topic').value)
@@ -209,6 +324,10 @@ class RgbdPeopleDetector(Node):
         self.yolo_model_path = str(
             self.get_parameter('yolo_model').value
         )
+        self.enable_lidar_fusion = bool(
+            self.get_parameter('enable_lidar_fusion').value
+        )
+        self.lidar_topic = str(self.get_parameter('lidar_topic').value)
         self.yolo_image_size = int(
             self.get_parameter('yolo_image_size').value
         )
@@ -228,6 +347,11 @@ class RgbdPeopleDetector(Node):
             'ready': False,
             'reason': 'waiting_for_first_inference',
         }
+        self.last_lidar_process_receive: Optional[float] = None
+        self.last_lidar_receive: Optional[float] = None
+        self.last_lidar_point_count = 0
+        self.last_lidar_track_updates = 0
+        self.last_lidar_error = ''
         self.tracks: Dict[int, Track] = {}
         self.track_lock = threading.Lock()
         self.next_track_id = 1
@@ -263,6 +387,15 @@ class RgbdPeopleDetector(Node):
             qos_profile_sensor_data,
             callback_group=self.sensor_callback_group,
         )
+        self.lidar_subscription = None
+        if self.enable_lidar_fusion:
+            self.lidar_subscription = self.create_subscription(
+                LaserScan,
+                self.lidar_topic,
+                self.lidar_callback,
+                qos_profile_sensor_data,
+                callback_group=self.sensor_callback_group,
+            )
         self.inference_timer = self.create_timer(
             float(self.get_parameter('inference_period_sec').value),
             self.inference_callback,
@@ -309,7 +442,9 @@ class RgbdPeopleDetector(Node):
             f'model={self.detector_model_name}, device={self.device}, '
             f'color={self.color_topic}, '
             f'depth={self.depth_topic}, output={self.people_topic}, '
-            f'target_frame={self.target_frame}'
+            f'target_frame={self.target_frame}, '
+            f'lidar_fusion={self.enable_lidar_fusion}, '
+            f'lidar={self.lidar_topic}'
         )
 
     def depth_callback(self, msg: Image):
@@ -323,6 +458,117 @@ class RgbdPeopleDetector(Node):
     def color_callback(self, msg: Image):
         self.latest_color = msg
         self.latest_color_receive = self.now_sec()
+
+    def lidar_callback(self, msg: LaserScan):
+        receive_sec = self.now_sec()
+        period = max(
+            0.0,
+            float(self.get_parameter('lidar_fusion_period_sec').value),
+        )
+        if (
+            self.last_lidar_process_receive is not None
+            and receive_sec - self.last_lidar_process_receive < period
+        ):
+            return
+        self.last_lidar_process_receive = receive_sec
+        self.last_lidar_receive = receive_sec
+
+        try:
+            transform = self.lookup_transform(
+                msg.header.frame_id,
+                msg.header.stamp,
+            )
+            points_xy = laser_points_in_target(
+                msg.ranges,
+                msg.angle_min,
+                msg.angle_increment,
+                msg.range_min,
+                msg.range_max,
+                transform,
+            )
+            stamp_sec = stamp_to_seconds(msg.header.stamp)
+            camera_hold = float(
+                self.get_parameter('lidar_track_hold_sec').value
+            )
+            with self.track_lock:
+                eligible_tracks = [
+                    track
+                    for track in self.tracks.values()
+                    if receive_sec - (
+                        track.camera_confirmed_receive
+                        if track.camera_confirmed_receive is not None
+                        else track.last_seen_receive
+                    ) <= camera_hold
+                ]
+                associations = associate_lidar_points(
+                    points_xy,
+                    eligible_tracks,
+                    stamp_sec,
+                    float(
+                        self.get_parameter(
+                            'lidar_association_radius_m'
+                        ).value
+                    ),
+                    int(self.get_parameter('lidar_min_points').value),
+                    float(
+                        self.get_parameter(
+                            'lidar_max_prediction_sec'
+                        ).value
+                    ),
+                )
+                position_smoothing = min(1.0, max(
+                    0.0,
+                    float(
+                        self.get_parameter(
+                            'lidar_position_smoothing'
+                        ).value
+                    ),
+                ))
+                velocity_smoothing = min(1.0, max(
+                    0.0,
+                    float(
+                        self.get_parameter(
+                            'lidar_velocity_smoothing'
+                        ).value
+                    ),
+                ))
+                for track in eligible_tracks:
+                    association = associations.get(track.track_id)
+                    if association is None:
+                        continue
+                    measured_x, measured_y, _ = association
+                    previous_x = track.x
+                    previous_y = track.y
+                    delta = stamp_sec - track.last_seen
+                    track.x = (
+                        position_smoothing * measured_x
+                        + (1.0 - position_smoothing) * previous_x
+                    )
+                    track.y = (
+                        position_smoothing * measured_y
+                        + (1.0 - position_smoothing) * previous_y
+                    )
+                    if 0.03 <= delta <= 1.0:
+                        measured_vx = (track.x - previous_x) / delta
+                        measured_vy = (track.y - previous_y) / delta
+                        track.vx = (
+                            velocity_smoothing * measured_vx
+                            + (1.0 - velocity_smoothing) * track.vx
+                        )
+                        track.vy = (
+                            velocity_smoothing * measured_vy
+                            + (1.0 - velocity_smoothing) * track.vy
+                        )
+                    track.last_seen = stamp_sec
+                    track.last_seen_receive = receive_sec
+                    track.last_lidar_receive = receive_sec
+            self.last_lidar_point_count = int(points_xy.shape[0])
+            self.last_lidar_track_updates = len(associations)
+            self.last_lidar_error = ''
+        except (TransformException, RuntimeError, ValueError) as exc:
+            self.last_lidar_point_count = 0
+            self.last_lidar_track_updates = 0
+            self.last_lidar_error = type(exc).__name__
 
     def now_sec(self) -> float:
         return self.get_clock().now().nanoseconds * 1e-9
@@ -489,21 +735,23 @@ class RgbdPeopleDetector(Node):
             track.score = detection.score
             track.last_seen = stamp_sec
             track.last_seen_receive = receive_sec
+            track.camera_confirmed_receive = receive_sec
 
         for index in unmatched:
             detection = detections[index]
             track_id = self.next_track_id
             self.next_track_id += 1
             self.tracks[track_id] = Track(
-                track_id,
-                detection.x,
-                detection.y,
-                detection.z,
-                0.0,
-                0.0,
-                detection.score,
-                stamp_sec,
-                receive_sec,
+                track_id=track_id,
+                x=detection.x,
+                y=detection.y,
+                z=detection.z,
+                vx=0.0,
+                vy=0.0,
+                score=detection.score,
+                last_seen=stamp_sec,
+                last_seen_receive=receive_sec,
+                camera_confirmed_receive=receive_sec,
             )
 
         return sorted(self.tracks.values(), key=lambda track: track.track_id)
@@ -555,8 +803,18 @@ class RgbdPeopleDetector(Node):
     def people_publish_callback(self):
         now = self.now_sec()
         timeout = float(self.get_parameter('track_timeout_sec').value)
+        camera_timeout = (
+            float(self.get_parameter('lidar_track_hold_sec').value)
+            if self.enable_lidar_fusion
+            else None
+        )
         with self.track_lock:
-            self.tracks = fresh_tracks(self.tracks, now, timeout)
+            self.tracks = fresh_tracks(
+                self.tracks,
+                now,
+                timeout,
+                camera_timeout_sec=camera_timeout,
+            )
             tracks = sorted(
                 self.tracks.values(),
                 key=lambda track: track.track_id,
@@ -589,6 +847,11 @@ class RgbdPeopleDetector(Node):
         )
         source_fresh = max(color_age, depth_age) <= source_timeout
         inference_fresh = inference_age <= source_timeout
+        lidar_age = (
+            now - self.last_lidar_receive
+            if self.last_lidar_receive is not None
+            else float('inf')
+        )
         fields = dict(self.last_inference_fields)
         fields['ready'] = bool(
             fields.get('ready', False)
@@ -606,6 +869,11 @@ class RgbdPeopleDetector(Node):
             'depth_age_sec': round(depth_age, 3),
             'camera_info_age_sec': round(info_age, 3),
             'inference_age_sec': round(inference_age, 3),
+            'lidar_fusion_enabled': self.enable_lidar_fusion,
+            'lidar_age_sec': round(lidar_age, 3),
+            'lidar_points': self.last_lidar_point_count,
+            'lidar_tracks_updated': self.last_lidar_track_updates,
+            'lidar_error': self.last_lidar_error,
         })
         self.publish_status(**fields)
 

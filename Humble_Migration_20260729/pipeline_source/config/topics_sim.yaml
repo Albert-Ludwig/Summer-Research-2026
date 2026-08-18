@@ -7,7 +7,6 @@ policy_cmd_vel_node:
     robot_goal_topic: /cpr_j100_0001/goal_pose
     cmd_vel_topic: /cpr_j100_0001/cmd_vel_stamped
     active_goal_marker_topic: /social_nav_diffusion/active_goal_marker
-    goal_path_topic: /social_nav_diffusion/goal_path
     projected_trajectory_topic: /social_nav_diffusion/projected_trajectory
     predicted_trajectory_topic: /social_nav_diffusion/predicted_trajectory
     policy_debug_topic: /social_nav_diffusion/policy_debug

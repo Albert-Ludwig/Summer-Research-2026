@@ -5,8 +5,10 @@ import numpy as np
 from social_nav_diffusion_ros.rgbd_people_detector import (
     RgbdPeopleDetector,
     Track,
+    associate_lidar_points,
     depth_from_box,
     fresh_tracks,
+    laser_points_in_target,
     quaternion_rotate,
 )
 
@@ -68,6 +70,80 @@ def test_fresh_tracks_removes_only_expired_receive_times():
     result = fresh_tracks(tracks, now_sec=21.0, timeout_sec=0.75)
 
     assert list(result) == [2]
+
+
+def test_fresh_tracks_limits_lidar_hold_by_camera_confirmation():
+    track = Track(
+        1,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.9,
+        10.0,
+        20.9,
+        camera_confirmed_receive=19.0,
+        last_lidar_receive=20.9,
+    )
+
+    result = fresh_tracks(
+        {1: track},
+        now_sec=21.0,
+        timeout_sec=0.75,
+        camera_timeout_sec=1.5,
+    )
+
+    assert result == {}
+
+
+def test_laser_points_in_target_filters_and_transforms_ranges():
+    transform = SimpleNamespace(
+        transform=SimpleNamespace(
+            translation=SimpleNamespace(x=1.0, y=2.0, z=0.0),
+            rotation=SimpleNamespace(x=0.0, y=0.0, z=0.0, w=1.0),
+        )
+    )
+
+    points = laser_points_in_target(
+        [1.0, float('inf'), 2.0],
+        angle_min=0.0,
+        angle_increment=np.pi / 2.0,
+        range_min=0.1,
+        range_max=10.0,
+        transform=transform,
+    )
+
+    np.testing.assert_allclose(points, [[2.0, 2.0], [-1.0, 2.0]], atol=1e-9)
+
+
+def test_associate_lidar_points_assigns_each_point_to_nearest_track():
+    tracks = [
+        Track(1, 1.0, 0.0, 0.0, 0.0, 0.0, 0.9, 10.0, 20.0),
+        Track(2, 3.0, 0.0, 0.0, 0.0, 0.0, 0.8, 10.0, 20.0),
+    ]
+    points = np.asarray([
+        [0.9, -0.1],
+        [1.1, 0.1],
+        [2.9, -0.1],
+        [3.1, 0.1],
+        [8.0, 8.0],
+    ])
+
+    associations = associate_lidar_points(
+        points,
+        tracks,
+        stamp_sec=10.1,
+        radius_m=0.5,
+        min_points=2,
+        max_prediction_sec=0.5,
+    )
+
+    assert set(associations) == {1, 2}
+    np.testing.assert_allclose(associations[1][:2], [1.0, 0.0], atol=1e-9)
+    np.testing.assert_allclose(associations[2][:2], [3.0, 0.0], atol=1e-9)
+    assert associations[1][2] == 2
+    assert associations[2][2] == 2
 
 
 def test_yolo_backend_requests_only_people_and_returns_boxes():

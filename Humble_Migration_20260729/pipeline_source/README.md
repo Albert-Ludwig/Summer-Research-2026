@@ -197,7 +197,6 @@ goal: /goal_pose and /cpr_j100_0001/goal_pose
 cmd output: /cpr_j100_0001/cmd_vel
 debug: /social_nav_diffusion/policy_debug
 marker: /social_nav_diffusion/active_goal_marker
-path: /social_nav_diffusion/goal_path
 projected path: /social_nav_diffusion/projected_trajectory
 raw predicted path: /social_nav_diffusion/predicted_trajectory
 ```
