@@ -9,9 +9,11 @@ rgbd_people_detector:
     target_frame: map
     detector_backend: ultralytics_yolo
     yolo_model: /workspace/SocialNavDiffusion_Inference/yolo11n.pt
-    yolo_image_size: 640
+    yolo_image_size: 480
     score_threshold: 0.45
-    inference_period_sec: 0.20
+    inference_period_sec: 0.33
+    people_publish_period_sec: 0.20
+    source_timeout_sec: 1.0
     max_sync_delta_sec: 0.20
     depth_scale: 0.001
     min_depth_m: 0.30

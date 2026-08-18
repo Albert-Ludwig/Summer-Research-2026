@@ -364,7 +364,7 @@ def stop_jackal_localization(
 def prepare_container_desktop() -> None:
     command = (
         "set -e; "
-        "for attempt in $(seq 1 20); do "
+        "for attempt in $(seq 1 60); do "
         "test -S /var/run/supervisor.sock && break; sleep 1; done; "
         "test -S /var/run/supervisor.sock; "
         "sed -i 's/127\\.0\\.0\\.1:6084/0.0.0.0:6084/' "
@@ -1068,7 +1068,7 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         "--max-angular-speed",
         type=float,
-        default=1.5707963267948966,
+        default=3.14,
     )
     parser.add_argument("--warmup-timeout", type=float, default=150.0)
     parser.add_argument("--clock-skew-limit", type=float, default=2.0)

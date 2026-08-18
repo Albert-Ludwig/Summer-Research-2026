@@ -4,7 +4,9 @@ import numpy as np
 
 from social_nav_diffusion_ros.rgbd_people_detector import (
     RgbdPeopleDetector,
+    Track,
     depth_from_box,
+    fresh_tracks,
     quaternion_rotate,
 )
 
@@ -55,6 +57,17 @@ def test_quaternion_rotate_applies_yaw_rotation():
     assert abs(x) < 1e-9
     assert abs(y - 1.0) < 1e-9
     assert abs(z) < 1e-9
+
+
+def test_fresh_tracks_removes_only_expired_receive_times():
+    tracks = {
+        1: Track(1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.9, 10.0, 20.0),
+        2: Track(2, 1.0, 0.0, 0.0, 0.0, 0.0, 0.8, 10.5, 20.6),
+    }
+
+    result = fresh_tracks(tracks, now_sec=21.0, timeout_sec=0.75)
+
+    assert list(result) == [2]
 
 
 def test_yolo_backend_requests_only_people_and_returns_boxes():

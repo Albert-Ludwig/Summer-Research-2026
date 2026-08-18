@@ -2,6 +2,7 @@ import json
 import math
 import os
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Sequence, Tuple
@@ -72,6 +73,7 @@ class Track:
     vy: float
     score: float
     last_seen: float
+    last_seen_receive: float
 
 
 def stamp_to_seconds(stamp) -> float:
@@ -139,6 +141,18 @@ def depth_from_box(
     return depth, pixel_x, pixel_y
 
 
+def fresh_tracks(
+    tracks: Dict[int, Track],
+    now_sec: float,
+    timeout_sec: float,
+) -> Dict[int, Track]:
+    return {
+        track_id: track
+        for track_id, track in tracks.items()
+        if now_sec - track.last_seen_receive <= timeout_sec
+    }
+
+
 class RgbdPeopleDetector(Node):
     def __init__(self):
         super().__init__('rgbd_people_detector')
@@ -167,6 +181,8 @@ class RgbdPeopleDetector(Node):
         self.declare_parameter('yolo_image_size', 640)
         self.declare_parameter('score_threshold', 0.45)
         self.declare_parameter('inference_period_sec', 0.20)
+        self.declare_parameter('people_publish_period_sec', 0.20)
+        self.declare_parameter('source_timeout_sec', 1.0)
         self.declare_parameter('max_sync_delta_sec', 0.20)
         self.declare_parameter('depth_scale', 0.001)
         self.declare_parameter('min_depth_m', 0.30)
@@ -203,10 +219,21 @@ class RgbdPeopleDetector(Node):
         self.latest_color: Optional[Image] = None
         self.latest_depth: Optional[Image] = None
         self.latest_camera_info: Optional[CameraInfo] = None
+        self.latest_color_receive: Optional[float] = None
+        self.latest_depth_receive: Optional[float] = None
+        self.latest_info_receive: Optional[float] = None
+        self.last_processed_color_stamp: Optional[Tuple[int, int]] = None
+        self.last_successful_inference_receive: Optional[float] = None
+        self.last_inference_fields = {
+            'ready': False,
+            'reason': 'waiting_for_first_inference',
+        }
         self.tracks: Dict[int, Track] = {}
+        self.track_lock = threading.Lock()
         self.next_track_id = 1
         self.sensor_callback_group = MutuallyExclusiveCallbackGroup()
         self.inference_callback_group = MutuallyExclusiveCallbackGroup()
+        self.publisher_callback_group = MutuallyExclusiveCallbackGroup()
 
         self.people_pub = self.create_publisher(People, self.people_topic, 10)
         self.marker_pub = self.create_publisher(
@@ -240,6 +267,11 @@ class RgbdPeopleDetector(Node):
             float(self.get_parameter('inference_period_sec').value),
             self.inference_callback,
             callback_group=self.inference_callback_group,
+        )
+        self.people_timer = self.create_timer(
+            float(self.get_parameter('people_publish_period_sec').value),
+            self.people_publish_callback,
+            callback_group=self.publisher_callback_group,
         )
 
         self.device = torch.device(
@@ -282,12 +314,18 @@ class RgbdPeopleDetector(Node):
 
     def depth_callback(self, msg: Image):
         self.latest_depth = msg
+        self.latest_depth_receive = self.now_sec()
 
     def camera_info_callback(self, msg: CameraInfo):
         self.latest_camera_info = msg
+        self.latest_info_receive = self.now_sec()
 
     def color_callback(self, msg: Image):
         self.latest_color = msg
+        self.latest_color_receive = self.now_sec()
+
+    def now_sec(self) -> float:
+        return self.get_clock().now().nanoseconds * 1e-9
 
     def publish_status(self, **fields):
         fields.setdefault('backend', self.detector_backend)
@@ -295,6 +333,9 @@ class RgbdPeopleDetector(Node):
         message = String()
         message.data = json.dumps(fields, sort_keys=True)
         self.status_pub.publish(message)
+
+    def remember_inference_status(self, **fields):
+        self.last_inference_fields = dict(fields)
 
     def lookup_transform(self, source_frame: str, stamp):
         timeout = Duration(
@@ -410,6 +451,7 @@ class RgbdPeopleDetector(Node):
         self,
         detections: List[Detection],
         stamp_sec: float,
+        receive_sec: float,
     ) -> List[Track]:
         association_distance = float(
             self.get_parameter('association_distance_m').value
@@ -446,6 +488,7 @@ class RgbdPeopleDetector(Node):
             track.z = detection.z
             track.score = detection.score
             track.last_seen = stamp_sec
+            track.last_seen_receive = receive_sec
 
         for index in unmatched:
             detection = detections[index]
@@ -460,19 +503,14 @@ class RgbdPeopleDetector(Node):
                 0.0,
                 detection.score,
                 stamp_sec,
+                receive_sec,
             )
 
-        timeout = float(self.get_parameter('track_timeout_sec').value)
-        self.tracks = {
-            track_id: track
-            for track_id, track in self.tracks.items()
-            if stamp_sec - track.last_seen <= timeout
-        }
         return sorted(self.tracks.values(), key=lambda track: track.track_id)
 
-    def publish_people(self, tracks: List[Track], source_header):
+    def publish_people(self, tracks: List[Track], stamp):
         people = People()
-        people.header.stamp = source_header.stamp
+        people.header.stamp = stamp
         people.header.frame_id = self.target_frame
         for track in tracks:
             person = Person()
@@ -514,12 +552,69 @@ class RgbdPeopleDetector(Node):
             markers.markers.append(marker)
         self.marker_pub.publish(markers)
 
+    def people_publish_callback(self):
+        now = self.now_sec()
+        timeout = float(self.get_parameter('track_timeout_sec').value)
+        with self.track_lock:
+            self.tracks = fresh_tracks(self.tracks, now, timeout)
+            tracks = sorted(
+                self.tracks.values(),
+                key=lambda track: track.track_id,
+            )
+
+        self.publish_people(tracks, self.get_clock().now().to_msg())
+
+        source_timeout = float(
+            self.get_parameter('source_timeout_sec').value
+        )
+        color_age = (
+            now - self.latest_color_receive
+            if self.latest_color_receive is not None
+            else float('inf')
+        )
+        depth_age = (
+            now - self.latest_depth_receive
+            if self.latest_depth_receive is not None
+            else float('inf')
+        )
+        info_age = (
+            now - self.latest_info_receive
+            if self.latest_info_receive is not None
+            else float('inf')
+        )
+        inference_age = (
+            now - self.last_successful_inference_receive
+            if self.last_successful_inference_receive is not None
+            else float('inf')
+        )
+        source_fresh = max(color_age, depth_age) <= source_timeout
+        inference_fresh = inference_age <= source_timeout
+        fields = dict(self.last_inference_fields)
+        fields['ready'] = bool(
+            fields.get('ready', False)
+            and source_fresh
+            and inference_fresh
+        )
+        if not source_fresh:
+            fields['reason'] = 'rgbd_source_stale'
+        elif not inference_fresh:
+            fields['reason'] = 'inference_stale'
+        fields.update({
+            'heartbeat': True,
+            'tracks': len(tracks),
+            'color_age_sec': round(color_age, 3),
+            'depth_age_sec': round(depth_age, 3),
+            'camera_info_age_sec': round(info_age, 3),
+            'inference_age_sec': round(inference_age, 3),
+        })
+        self.publish_status(**fields)
+
     def inference_callback(self):
         msg = self.latest_color
         depth_msg = self.latest_depth
         camera_info = self.latest_camera_info
         if msg is None or depth_msg is None or camera_info is None:
-            self.publish_status(
+            self.remember_inference_status(
                 ready=False,
                 reason='waiting_for_color_depth_or_info',
             )
@@ -531,12 +626,20 @@ class RgbdPeopleDetector(Node):
         )
         max_delta = float(self.get_parameter('max_sync_delta_sec').value)
         if sync_delta > max_delta:
-            self.publish_status(
+            self.remember_inference_status(
                 ready=False,
                 reason='color_depth_out_of_sync',
                 sync_delta_sec=sync_delta,
             )
             return
+
+        color_stamp = (
+            int(msg.header.stamp.sec),
+            int(msg.header.stamp.nanosec),
+        )
+        if color_stamp == self.last_processed_color_stamp:
+            return
+        self.last_processed_color_stamp = color_stamp
 
         start = time.perf_counter()
         try:
@@ -555,13 +658,16 @@ class RgbdPeopleDetector(Node):
                 camera_info,
                 transform,
             )
-            tracks = self.update_tracks(
-                detections,
-                stamp_to_seconds(msg.header.stamp),
-            )
-            self.publish_people(tracks, msg.header)
+            receive_sec = self.now_sec()
+            with self.track_lock:
+                tracks = self.update_tracks(
+                    detections,
+                    stamp_to_seconds(msg.header.stamp),
+                    receive_sec,
+                )
+            self.last_successful_inference_receive = receive_sec
             elapsed_ms = (time.perf_counter() - start) * 1000.0
-            self.publish_status(
+            self.remember_inference_status(
                 ready=True,
                 device=str(self.device),
                 detections=len(detections),
@@ -571,7 +677,7 @@ class RgbdPeopleDetector(Node):
                 sync_delta_sec=round(sync_delta, 4),
             )
         except (TransformException, RuntimeError, ValueError) as exc:
-            self.publish_status(
+            self.remember_inference_status(
                 ready=False,
                 reason=type(exc).__name__,
                 detail=str(exc),

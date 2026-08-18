@@ -516,3 +516,26 @@ http://127.0.0.1:6084/vnc.html?autoconnect=1&resize=scale
 - Final matching hashes: policy `866e46004e66665b1f3fad459ca00e776cdc9748431ac7909eacca508d9f0e80`; YAML `dbf2688c4b19ed872a32fb6d7fb0eb8e5ecd2f5414946a66aa1c970aef15d36b`.
 - Changes are not committed. Modified persistent files are under `Humble_Migration_20260729/pipeline_source/`.
 - The real test stack, onboard launcher-managed localization, `jackal_robohub`, and `ros_vnc_jazzy_gpu_full` are stopped.
+
+## 2026-08-12 Humble Three-Stage Perception And Safety Update
+
+- Modified only the persistent Humble source under `Humble_Migration_20260729/pipeline_source/` and synchronized it to `jackal_robohub`. Jazzy, the checkpoint, `SocialNavDiffusion_Inference`, acados, and teammate Nav2 files were not changed.
+- The RGB-D wrapper now publishes complete `/people` messages and detector status at 5 Hz, including empty people lists. YOLO remains person-only `yolo11n`, runs at about 3 Hz with 480-pixel input, processes each camera frame at most once, and expires tracks after `0.75 s`.
+- The policy now requires a fresh `/people` stream and feeds the latest live LiDAR snapshot into the existing Diffusion occupancy input. LiDAR is voxelized at `0.25 m`, capped at 64 nearest points, and no scan history or full-scan cache is retained.
+- The command adapter no longer slows valid Diffusion commands between `0.55 m` and `1.0 m`. It only vetoes an unsafe translation or rotation inside `0.55 m`, plus the existing stale-data, watchdog, emergency-stop, and maximum-speed protections. It does not choose a path or turn direction.
+- Humble build passed. Focused perception, LiDAR fusion, and adapter regression tests passed: `16 passed`.
+- The package-wide test command still reports pre-existing repository-wide flake8/pep257 debt and two stale shutdown tests that require a missing `prepare_for_shutdown()` method. These failures are outside this change; the modified behavior tests pass.
+- Installed Humble configuration was verified: people and LiDAR streams are required, LiDAR timeout is `0.5 s`, max LiDAR points is 64, YOLO image size is 480, inference period is `0.33 s`, and `/people` publish period is `0.20 s`.
+- No real robot node or velocity output was started. `jackal_robohub` was stopped after verification. Changes are not committed or pushed.
+
+## 2026-08-12 Humble Static-Obstacle Follow-Up
+
+- Stopped the live policy, people detector, command adapter, RViz, and launcher-managed onboard localization before editing. No motion test was run after the changes.
+- Read the real `/jackal1/platform_velocity_controller` limits: `2.0 m/s`, `4.0 rad/s`, `20.0 m/s^2`, and `25.0 rad/s^2`. The teammate policy limits `1.0 m/s`, `3.14 rad/s`, `1.5 m/s^2`, and `3.14 rad/s^2` are all supported by the base.
+- Changed the one-command Humble launcher and final adapter angular limit from `pi/2` to `3.14 rad/s`. Linear speed and both acceleration limits already matched the teammate policy.
+- Changed the policy map subscription to reliable, transient-local QoS so a saved `/jackal1/map` published before policy startup is still received.
+- Added a bounded live-LiDAR obstacle memory: `0.8 s`, `0.25 m` voxels, maximum 64 nearest points in the policy frame. It stores no raw scan history and does not add a process.
+- Added directional emergency safety latches in the final adapter. A translation/rotation danger inside `0.55 m` is retained for at least `0.5 s` and released only after three scans at or beyond `0.65 m`. The latch only vetoes unsafe command components and does not choose a route or steering direction.
+- Teammate model source, checkpoint, acados settings, static obstacle budget (`k_static=20`), Nav2 parameters, and Jazzy were not modified.
+- Focused tests passed: 5 RGB-D tests and 16 QoS/LiDAR/adapter tests. Final Humble `social_nav_diffusion_ros` build passed.
+- Windows persistent source and `jackal_robohub` runtime copies have matching SHA256 hashes for all six synchronized files. Changes are not committed or pushed.

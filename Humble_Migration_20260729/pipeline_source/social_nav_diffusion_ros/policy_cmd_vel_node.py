@@ -57,7 +57,15 @@ from people_msgs.msg import People
 from rclpy.duration import Duration
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
+from rclpy.qos import (
+    DurabilityPolicy,
+    HistoryPolicy,
+    QoSProfile,
+    ReliabilityPolicy,
+    qos_profile_sensor_data,
+)
 from rclpy.time import Time
+from sensor_msgs.msg import LaserScan
 from std_msgs.msg import String
 from tf2_ros import Buffer, TransformException, TransformListener
 from visualization_msgs.msg import Marker
@@ -65,6 +73,112 @@ from visualization_msgs.msg import Marker
 
 def clamp(value: float, lower: float, upper: float) -> float:
     return max(lower, min(upper, value))
+
+
+def voxelized_laser_points(
+    ranges,
+    angle_min: float,
+    angle_increment: float,
+    message_range_min: float,
+    message_range_max: float,
+    configured_range_min: float,
+    configured_range_max: float,
+    voxel_size: float,
+    max_points: int,
+) -> List[Tuple[float, float]]:
+    """Return a bounded nearest-first scan snapshot in the scan frame."""
+    lower = max(float(message_range_min), float(configured_range_min), 0.0)
+    upper_candidates = [float(configured_range_max)]
+    if math.isfinite(float(message_range_max)) and float(message_range_max) > 0.0:
+        upper_candidates.append(float(message_range_max))
+    upper = min(upper_candidates)
+    if upper <= lower or max_points <= 0:
+        return []
+
+    cell_size = max(float(voxel_size), 1e-3)
+    cells: Dict[Tuple[int, int], Tuple[float, float, float]] = {}
+    angle = float(angle_min)
+    increment = float(angle_increment)
+    for raw_range in ranges:
+        distance = float(raw_range)
+        if math.isfinite(distance) and lower <= distance <= upper:
+            x = distance * math.cos(angle)
+            y = distance * math.sin(angle)
+            key = (int(round(x / cell_size)), int(round(y / cell_size)))
+            previous = cells.get(key)
+            if previous is None or distance < previous[0]:
+                cells[key] = (distance, x, y)
+        angle += increment
+
+    nearest = sorted(cells.values(), key=lambda item: item[0])[:max_points]
+    return [(float(x), float(y)) for _, x, y in nearest]
+
+
+def combine_occupancy_points(static_points, live_points):
+    """Combine the static map with one bounded LiDAR snapshot."""
+    try:
+        import numpy as np
+
+        live_array = np.asarray(live_points, dtype=float).reshape((-1, 2))
+        if static_points is None or len(static_points) == 0:
+            return live_array
+        return np.concatenate(
+            (np.asarray(static_points, dtype=float).reshape((-1, 2)), live_array),
+            axis=0,
+        )
+    except ImportError:
+        static_list = list(static_points) if static_points is not None else []
+        return static_list + list(live_points)
+
+
+def update_obstacle_memory(
+    memory,
+    points,
+    now_sec: float,
+    ttl_sec: float,
+    voxel_size: float,
+    max_points: int,
+    origin_xy=(0.0, 0.0),
+):
+    """Update a bounded, timestamped obstacle voxel cache."""
+    now = float(now_sec)
+    ttl = max(0.0, float(ttl_sec))
+    cell_size = max(float(voxel_size), 1e-3)
+    limit = max(0, int(max_points))
+    retained = {
+        key: value
+        for key, value in memory.items()
+        if now - float(value[2]) <= ttl
+    }
+    for x, y in points:
+        px = float(x)
+        py = float(y)
+        key = (
+            int(round(px / cell_size)),
+            int(round(py / cell_size)),
+        )
+        retained[key] = (px, py, now)
+
+    origin_x, origin_y = float(origin_xy[0]), float(origin_xy[1])
+    ranked = sorted(
+        retained.items(),
+        key=lambda item: (
+            math.hypot(item[1][0] - origin_x, item[1][1] - origin_y),
+            -item[1][2],
+        ),
+    )[:limit]
+    bounded = dict(ranked)
+    return bounded, [(value[0], value[1]) for _, value in ranked]
+
+
+def map_subscription_qos() -> QoSProfile:
+    """Receive a saved map even when the policy starts after map_server."""
+    return QoSProfile(
+        history=HistoryPolicy.KEEP_LAST,
+        depth=1,
+        reliability=ReliabilityPolicy.RELIABLE,
+        durability=DurabilityPolicy.TRANSIENT_LOCAL,
+    )
 
 
 def wrap_angle(angle: float) -> float:
@@ -585,6 +699,7 @@ class PolicyCmdVelNode(Node):
         self.declare_parameter("debug_verbose_state", False)
         self.declare_parameter("debug_csv_path", "")
         self.declare_parameter("ignore_people_for_policy", False)
+        self.declare_parameter("require_people_stream", False)
         self.declare_parameter("ignore_map_for_policy", False)
         self.declare_parameter("force_zero_humans", False)
         self.declare_parameter("fixed_test_goal_in_robot_frame", False)
@@ -663,6 +778,18 @@ class PolicyCmdVelNode(Node):
         self.declare_parameter("occupied_threshold", 50)
         self.declare_parameter("max_static_map_cells", 20000)
         self.declare_parameter("treat_unknown_as_occupied", False)
+        self.declare_parameter("enable_live_lidar_to_policy", False)
+        self.declare_parameter("require_live_lidar_for_policy", False)
+        self.declare_parameter(
+            "lidar_topic",
+            "/jackal1/sensors/lidar3d_0/scan",
+        )
+        self.declare_parameter("lidar_timeout_sec", 0.5)
+        self.declare_parameter("lidar_min_range_m", 0.15)
+        self.declare_parameter("lidar_max_range_m", 6.0)
+        self.declare_parameter("lidar_voxel_size_m", 0.25)
+        self.declare_parameter("lidar_max_points", 64)
+        self.declare_parameter("lidar_obstacle_memory_sec", 0.8)
         self.declare_parameter("reset_policy_state_on_new_goal", True)
         self.declare_parameter("reset_policy_state_on_goal_reached", True)
         self.declare_parameter("goal_duplicate_position_epsilon", 0.03)
@@ -721,18 +848,27 @@ class PolicyCmdVelNode(Node):
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
         self.target_policy_frame = str(self.get_parameter("target_policy_frame").value)
+        self.live_lidar_enabled = bool(
+            self.get_parameter("enable_live_lidar_to_policy").value
+        )
+        self.require_live_lidar = bool(
+            self.get_parameter("require_live_lidar_for_policy").value
+        )
+        self.lidar_topic = str(self.get_parameter("lidar_topic").value)
         self.last_frame_debug = {
             "latest_odom_header_frame_id": "",
             "latest_odom_child_frame_id": "",
             "latest_goal_header_frame_id": "",
             "latest_map_header_frame_id": "",
             "latest_people_header_frame_id": "",
+            "latest_lidar_header_frame_id": "",
             "people_frame_used": "",
             "target_policy_frame": self.target_policy_frame,
             "tf_robot_to_target_success": False,
             "tf_goal_to_target_success": False,
             "tf_people_to_target_success": False,
             "tf_map_to_target_success": False,
+            "tf_lidar_to_target_success": False,
             "tf_failure_reason": "",
         }
         self._logged_frame_ids = False
@@ -744,6 +880,16 @@ class PolicyCmdVelNode(Node):
         self._static_map_downsampled = False
         self._static_map_frame_id = ""
         self.last_static_map_has_map_value = 0.0
+        self._latest_lidar_points_local: List[Tuple[float, float]] = []
+        self._latest_lidar_frame_id = ""
+        self.latest_lidar_time: Optional[float] = None
+        self._latest_lidar_sequence = 0
+        self._live_lidar_cache_sequence = -1
+        self._live_lidar_points_cache: List[Tuple[float, float]] = []
+        self._live_lidar_obstacle_memory = {}
+        self._fused_occupancy_cache_key = None
+        self._fused_occupancy_cache = None
+        self.last_live_lidar_points_used = 0
         self.last_policy_state_reset_on_new_goal = False
         self.last_policy_state_reset_on_goal_reached = False
         self.last_policy_state_after_reset = {}
@@ -846,7 +992,19 @@ class PolicyCmdVelNode(Node):
 
         self.create_subscription(People, self.people_topic, self.people_callback, 10)
         self.create_subscription(Odometry, self.odom_topic, self.odom_callback, 20)
-        self.create_subscription(OccupancyGrid, self.map_topic, self.map_callback, 1)
+        self.create_subscription(
+            OccupancyGrid,
+            self.map_topic,
+            self.map_callback,
+            map_subscription_qos(),
+        )
+        if self.live_lidar_enabled:
+            self.create_subscription(
+                LaserScan,
+                self.lidar_topic,
+                self.lidar_callback,
+                qos_profile_sensor_data,
+            )
         self.create_subscription(PoseStamped, self.goal_topic, self.goal_callback, 10)
         self.create_subscription(PoseStamped, self.robot_goal_topic, self.goal_callback, 10)
 
@@ -1160,6 +1318,28 @@ class PolicyCmdVelNode(Node):
     def map_callback(self, msg: OccupancyGrid):
         self.latest_map = msg
         self.latest_map_time = self.now_sec()
+        self._fused_occupancy_cache_key = None
+
+    def lidar_callback(self, msg: LaserScan):
+        self._latest_lidar_points_local = voxelized_laser_points(
+            msg.ranges,
+            msg.angle_min,
+            msg.angle_increment,
+            msg.range_min,
+            msg.range_max,
+            float(self.get_parameter("lidar_min_range_m").value),
+            float(self.get_parameter("lidar_max_range_m").value),
+            float(self.get_parameter("lidar_voxel_size_m").value),
+            max(1, int(self.get_parameter("lidar_max_points").value)),
+        )
+        self._latest_lidar_frame_id = msg.header.frame_id or self.target_policy_frame
+        self.latest_lidar_time = self.now_sec()
+        self._latest_lidar_sequence += 1
+        self.last_frame_debug["latest_lidar_header_frame_id"] = (
+            self._latest_lidar_frame_id
+        )
+        self._live_lidar_cache_sequence = -1
+        self._fused_occupancy_cache_key = None
 
     def goal_position_delta(self, old_goal: PoseStamped, new_goal: PoseStamped) -> float:
         dx = float(new_goal.pose.position.x) - float(old_goal.pose.position.x)
@@ -1372,7 +1552,7 @@ class PolicyCmdVelNode(Node):
         self.last_heading_to_goal = float(goal["heading_to_goal"])
         self.last_heading_error = float(goal["heading_error"])
 
-    def build_occupancy_state(self) -> Optional[Dict]:
+    def _build_static_occupancy_state(self) -> Optional[Dict]:
         if self.latest_map is None or bool(self.get_parameter("ignore_map_for_policy").value):
             self.last_static_map_has_map_value = 0.0
             return None
@@ -1479,6 +1659,85 @@ class PolicyCmdVelNode(Node):
         self._static_map_cells_used = len(transformed)
         self._static_map_downsampled = downsampled
         self.last_static_map_has_map_value = 1.0 if transformed else 0.0
+        return occupancy
+
+    def build_live_lidar_points(self) -> List[Tuple[float, float]]:
+        if not self.live_lidar_enabled:
+            self.last_live_lidar_points_used = 0
+            return []
+        timeout = max(0.1, float(self.get_parameter("lidar_timeout_sec").value))
+        if self.data_is_stale(self.latest_lidar_time, self.now_sec(), timeout):
+            self.last_live_lidar_points_used = 0
+            return []
+        if self._live_lidar_cache_sequence == self._latest_lidar_sequence:
+            return self._live_lidar_points_cache
+
+        transform = self.lookup_transform_to_target(
+            self._latest_lidar_frame_id,
+            "tf_lidar_to_target_success",
+        )
+        if transform is None:
+            transformed = self._latest_lidar_points_local
+            origin_xy = (0.0, 0.0)
+        else:
+            transformed = [
+                apply_transform_xy(x, y, transform)
+                for x, y in self._latest_lidar_points_local
+            ]
+            origin_xy = (
+                float(transform.transform.translation.x),
+                float(transform.transform.translation.y),
+            )
+        now = self.now_sec()
+        (
+            self._live_lidar_obstacle_memory,
+            self._live_lidar_points_cache,
+        ) = update_obstacle_memory(
+            self._live_lidar_obstacle_memory,
+            transformed,
+            now_sec=now,
+            ttl_sec=float(
+                self.get_parameter("lidar_obstacle_memory_sec").value
+            ),
+            voxel_size=float(self.get_parameter("lidar_voxel_size_m").value),
+            max_points=max(1, int(self.get_parameter("lidar_max_points").value)),
+            origin_xy=origin_xy,
+        )
+        self._live_lidar_cache_sequence = self._latest_lidar_sequence
+        self.last_live_lidar_points_used = len(self._live_lidar_points_cache)
+        return self._live_lidar_points_cache
+
+    def build_occupancy_state(self) -> Optional[Dict]:
+        static_occupancy = self._build_static_occupancy_state()
+        live_points = self.build_live_lidar_points()
+        if not live_points:
+            return static_occupancy
+
+        cache_key = (self._static_map_cache_stamp, self._live_lidar_cache_sequence)
+        if (
+            self._fused_occupancy_cache_key == cache_key
+            and self._fused_occupancy_cache is not None
+        ):
+            return self._fused_occupancy_cache
+
+        static_points = (
+            static_occupancy.get("occ_world_xy")
+            if static_occupancy is not None
+            else None
+        )
+        fused_points = combine_occupancy_points(static_points, live_points)
+        occupancy = dict(static_occupancy or {})
+        occupancy.update({
+            "frame_id": self.target_policy_frame,
+            "occ_world_xy": fused_points,
+            "live_lidar_points_used": len(live_points),
+            "cells_total": int(occupancy.get("cells_total", 0))
+            + len(live_points),
+            "cells_used": int(occupancy.get("cells_used", 0))
+            + len(live_points),
+        })
+        self._fused_occupancy_cache_key = cache_key
+        self._fused_occupancy_cache = occupancy
         return occupancy
 
     def data_is_stale(self, stamp: Optional[float], now: float, timeout: float) -> bool:
@@ -1951,6 +2210,7 @@ class PolicyCmdVelNode(Node):
             "enable_sign_conflict_guard": bool(self.get_parameter("enable_sign_conflict_guard").value),
             "debug_verbose_state": bool(self.get_parameter("debug_verbose_state").value),
             "ignore_people_for_policy": bool(self.get_parameter("ignore_people_for_policy").value),
+            "require_people_stream": bool(self.get_parameter("require_people_stream").value),
             "ignore_map_for_policy": bool(self.get_parameter("ignore_map_for_policy").value),
             "force_zero_humans": bool(self.get_parameter("force_zero_humans").value),
             "fixed_test_goal_in_robot_frame": bool(self.get_parameter("fixed_test_goal_in_robot_frame").value),
@@ -1998,6 +2258,18 @@ class PolicyCmdVelNode(Node):
             "humans_used": self.last_humans_used,
             "humans": humans_seen,
             "map_received": map_received,
+            "live_lidar_enabled": self.live_lidar_enabled,
+            "require_live_lidar": self.require_live_lidar,
+            "live_lidar_points_used": self.last_live_lidar_points_used,
+            "live_lidar_max_points": int(self.get_parameter("lidar_max_points").value),
+            "live_lidar_obstacle_memory_sec": float(
+                self.get_parameter("lidar_obstacle_memory_sec").value
+            ),
+            "live_lidar_age_sec": (
+                now - self.latest_lidar_time
+                if self.latest_lidar_time is not None
+                else float("nan")
+            ),
             "odom_received": odom_received,
             "goal_received": goal_received,
             "raw_action_type": self.last_raw_action_type,
@@ -2051,12 +2323,14 @@ class PolicyCmdVelNode(Node):
             "latest_goal_header_frame_id": self.last_frame_debug.get("latest_goal_header_frame_id", ""),
             "latest_map_header_frame_id": self.last_frame_debug.get("latest_map_header_frame_id", ""),
             "latest_people_header_frame_id": self.last_frame_debug.get("latest_people_header_frame_id", ""),
+            "latest_lidar_header_frame_id": self.last_frame_debug.get("latest_lidar_header_frame_id", ""),
             "people_frame_used": self.last_frame_debug.get("people_frame_used", ""),
             "target_policy_frame": self.target_policy_frame,
             "tf_robot_to_target_success": self.last_frame_debug.get("tf_robot_to_target_success", False),
             "tf_goal_to_target_success": self.last_frame_debug.get("tf_goal_to_target_success", False),
             "tf_people_to_target_success": self.last_frame_debug.get("tf_people_to_target_success", False),
             "tf_map_to_target_success": self.last_frame_debug.get("tf_map_to_target_success", False),
+            "tf_lidar_to_target_success": self.last_frame_debug.get("tf_lidar_to_target_success", False),
             "tf_failure_reason": self.last_frame_debug.get("tf_failure_reason", ""),
             "static_map_enabled": bool(self.get_parameter("enable_static_map_to_policy").value),
             "static_map_frame_id": self._static_map_frame_id,
@@ -2256,15 +2530,27 @@ class PolicyCmdVelNode(Node):
             return None, "no goal received"
         if self.data_is_stale(self.latest_odom_time, now, stale_timeout):
             return None, f"no fresh {self.odom_topic}"
+        if self.live_lidar_enabled and self.require_live_lidar:
+            lidar_timeout = max(
+                0.1,
+                float(self.get_parameter("lidar_timeout_sec").value),
+            )
+            if self.data_is_stale(self.latest_lidar_time, now, lidar_timeout):
+                return None, f"no fresh {self.lidar_topic}"
         goal_timeout = float(self.get_parameter("goal_timeout_sec").value)
         if self.data_is_stale(self.latest_goal_time, now, goal_timeout):
             return None, f"goal timed out: older than {goal_timeout:.1f}s"
-        people_stale = (
-            self.latest_people_time is not None
-            and self.data_is_stale(self.latest_people_time, now, stale_timeout)
+        ignore_people = bool(self.get_parameter("ignore_people_for_policy").value)
+        require_people = bool(self.get_parameter("require_people_stream").value)
+        people_stale = self.data_is_stale(
+            self.latest_people_time,
+            now,
+            stale_timeout,
         )
+        if not ignore_people and require_people and people_stale:
+            return None, "required /people stream is missing or stale"
         if people_stale and now - self._last_source_log_time > 1.0:
-            self.get_logger().warn("/people is stale; excluding stale people from policy input")
+            self.get_logger().warn("/people is stale; continuing with empty people list")
             self._last_source_log_time = now
 
         try:

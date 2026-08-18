@@ -45,7 +45,9 @@ The teammate's tuned parameter files are used without modification.
 The launcher sources `nahl_ws/install/setup.bash` and starts localization on the Jackal over SSH.
 `jackal_nav` is not installed or launched inside the container.
 The adapter starts only after localization, the policy, and the people detector are ready.
-Default limits are `1.0 m/s` linear and `pi/2 rad/s` angular.
+Default limits match the teammate policy: `1.0 m/s` linear,
+`3.14 rad/s` angular, `1.5 m/s^2` linear acceleration, and
+`3.14 rad/s^2` angular acceleration.
 The launcher does not open an external browser by default.
 PyTorch compilation is limited to one worker to reduce startup memory and CPU peaks.
 

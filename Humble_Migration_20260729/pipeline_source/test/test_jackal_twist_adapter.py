@@ -7,7 +7,9 @@ from std_msgs.msg import Bool
 
 from social_nav_diffusion_ros.jackal_twist_adapter import (
     JackalTwistAdapter,
-    directional_scan_clearances,
+    braking_poses,
+    laser_scan_points_base,
+    swept_footprint_collision,
 )
 
 
@@ -72,7 +74,7 @@ def test_enabled_output_is_estop_gated_and_clamped():
     try:
         command = TwistStamped()
         command.twist.linear.x = 2.0
-        command.twist.angular.z = -2.0
+        command.twist.angular.z = -4.0
 
         node.command_callback(command)
         assert len(capture.messages) == 1
@@ -85,7 +87,7 @@ def test_enabled_output_is_estop_gated_and_clamped():
         assert capture.messages[-1].linear.x == 1.0
         assert math.isclose(
             capture.messages[-1].angular.z,
-            -math.pi / 2.0,
+            -3.14,
         )
     finally:
         destroy_node(node)
@@ -98,14 +100,14 @@ def test_simulation_output_can_bypass_estop_gate_explicitly():
     try:
         command = TwistStamped()
         command.twist.linear.x = 2.0
-        command.twist.angular.z = -2.0
+        command.twist.angular.z = -4.0
 
         node.command_callback(command)
         assert len(capture.messages) == 1
         assert capture.messages[-1].linear.x == 1.0
         assert math.isclose(
             capture.messages[-1].angular.z,
-            -math.pi / 2.0,
+            -3.14,
         )
     finally:
         destroy_node(node)
@@ -130,21 +132,58 @@ def test_simulation_can_publish_continuous_zero_while_waiting_for_input():
         destroy_node(node)
 
 
-def test_directional_scan_clearances_find_front_rear_and_side():
-    clearances = directional_scan_clearances(
+def collision_for(points, linear, angular):
+    return swept_footprint_collision(
+        points,
+        linear,
+        angular,
+        footprint_half_length=0.255,
+        footprint_half_width=0.215,
+        safety_margin=0.05,
+        reaction_time=0.15,
+        linear_decel=1.5,
+        angular_decel=3.14,
+        step_sec=0.05,
+        max_horizon_sec=1.5,
+    )
+
+
+def test_scan_points_are_transformed_from_lidar_to_base():
+    points = laser_scan_points_base(
         make_scan(front=0.8, left=0.4, rear=0.6),
         configured_min_range=0.15,
         configured_max_range=6.0,
-        front_half_angle=math.pi / 3.0,
-        rear_half_angle=math.pi / 3.0,
+        sensor_x=0.12,
+        sensor_y=0.0,
+        sensor_yaw=0.0,
     )
 
-    assert math.isclose(clearances['front'], 0.8, rel_tol=1e-6)
-    assert math.isclose(clearances['rear'], 0.6, rel_tol=1e-6)
-    assert math.isclose(clearances['all'], 0.4, rel_tol=1e-6)
+    assert any(
+        math.isclose(x, 0.92, abs_tol=1e-6)
+        and math.isclose(y, 0.0, abs_tol=1e-6)
+        for x, y in points
+    )
+    assert any(
+        math.isclose(x, 0.12, abs_tol=1e-6)
+        and math.isclose(y, 0.4, abs_tol=1e-6)
+        for x, y in points
+    )
 
 
-def test_lidar_safety_fails_closed_and_scales_forward_motion():
+def test_braking_sweep_detects_straight_collision_and_ignores_side_point():
+    poses = braking_poses(1.0, 0.0, 0.15, 1.5, 3.14, 0.05, 1.5)
+    assert poses[-1][0] > 0.4
+    assert collision_for([(0.65, 0.0)], 1.0, 0.0) is not None
+    assert collision_for([(0.65, 0.4)], 1.0, 0.0) is None
+
+
+def test_braking_sweep_is_command_direction_aware():
+    obstacle = [(0.45, 0.35)]
+    assert collision_for(obstacle, 0.8, 1.0) is not None
+    assert collision_for(obstacle, 0.8, -1.0) is None
+
+
+def test_lidar_safety_fails_closed_without_overriding_clear_motion():
     node = make_node(
         True,
         require_emergency_stop_clear=False,
@@ -158,15 +197,15 @@ def test_lidar_safety_fails_closed_and_scales_forward_motion():
         node.command_callback(command)
         assert capture.messages[-1].linear.x == 0.0
 
-        node.lidar_callback(make_scan(front=0.775))
+        node.lidar_callback(make_scan(front=0.8))
         node.command_callback(command)
         assert math.isclose(
             capture.messages[-1].linear.x,
-            0.1,
+            0.2,
             rel_tol=1e-6,
         )
 
-        node.lidar_callback(make_scan(front=0.4))
+        node.lidar_callback(make_scan(front=0.2))
         node.command_callback(command)
         assert capture.messages[-1].linear.x == 0.0
         assert capture.messages[-1].angular.z == 0.0
@@ -174,7 +213,7 @@ def test_lidar_safety_fails_closed_and_scales_forward_motion():
         destroy_node(node)
 
 
-def test_lidar_safety_blocks_rotation_near_side_obstacle():
+def test_collision_veto_clears_the_whole_command():
     node = make_node(
         True,
         require_emergency_stop_clear=False,
@@ -183,12 +222,36 @@ def test_lidar_safety_blocks_rotation_near_side_obstacle():
     capture = CapturePublisher()
     node.output_pub = capture
     try:
-        node.lidar_callback(make_scan(left=0.4))
+        node.latest_lidar_points = [(0.45, 0.35)]
+        node.last_lidar_time = node.now_sec()
         command = TwistStamped()
-        command.twist.angular.z = 0.3
+        command.twist.linear.x = 0.8
+        command.twist.angular.z = 1.0
         node.command_callback(command)
 
         assert capture.messages[-1].linear.x == 0.0
         assert capture.messages[-1].angular.z == 0.0
+    finally:
+        destroy_node(node)
+
+
+def test_safe_alternative_command_passes_without_component_changes():
+    node = make_node(
+        True,
+        require_emergency_stop_clear=False,
+        enable_lidar_safety=True,
+    )
+    capture = CapturePublisher()
+    node.output_pub = capture
+    try:
+        node.latest_lidar_points = [(0.45, 0.35)]
+        node.last_lidar_time = node.now_sec()
+        command = TwistStamped()
+        command.twist.linear.x = 0.8
+        command.twist.angular.z = -1.0
+        node.command_callback(command)
+
+        assert capture.messages[-1].linear.x == 0.8
+        assert capture.messages[-1].angular.z == -1.0
     finally:
         destroy_node(node)

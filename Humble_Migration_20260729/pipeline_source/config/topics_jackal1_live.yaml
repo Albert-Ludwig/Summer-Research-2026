@@ -8,11 +8,12 @@ policy_cmd_vel_node:
     enable_live_lidar_to_policy: true
     require_live_lidar_for_policy: true
     lidar_topic: /jackal1/sensors/lidar3d_0/scan
-    lidar_timeout_sec: 0.4
+    lidar_timeout_sec: 0.5
     lidar_min_range_m: 0.15
     lidar_max_range_m: 6.0
-    lidar_voxel_size_m: 0.10
-    lidar_max_points: 1000
+    lidar_voxel_size_m: 0.25
+    lidar_max_points: 64
+    lidar_obstacle_memory_sec: 0.8
     goal_topic: /goal_pose
     robot_goal_topic: /jackal1/goal_pose
     cmd_vel_topic: /debug_cmd_vel
