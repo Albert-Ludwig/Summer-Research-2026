@@ -1,14 +1,16 @@
+import collections
 import configparser
 import hashlib
 import csv
 import copy
+import json
 import math
 import os
 import sys
 import threading
 import time
 import traceback
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Deque, Dict, List, Optional, Tuple
 
 INFERENCE_REPO_DEFAULT = "/workspace/SocialNavDiffusion_Inference"
 VENV_PYTHON_DEFAULT = f"{INFERENCE_REPO_DEFAULT}/.venv/bin/python"
@@ -51,7 +53,7 @@ def maybe_reexec_for_diffusion():
 maybe_reexec_for_diffusion()
 
 import rclpy
-from geometry_msgs.msg import PoseStamped, TwistStamped
+from geometry_msgs.msg import Point, PoseStamped, TwistStamped
 from nav_msgs.msg import OccupancyGrid, Odometry, Path
 from people_msgs.msg import People
 from rclpy.duration import Duration
@@ -64,15 +66,28 @@ from rclpy.qos import (
     ReliabilityPolicy,
     qos_profile_sensor_data,
 )
+from rcl_interfaces.msg import SetParametersResult
 from rclpy.time import Time
 from sensor_msgs.msg import LaserScan
-from std_msgs.msg import String
+from std_msgs.msg import Float32MultiArray, String
 from tf2_ros import Buffer, TransformException, TransformListener
-from visualization_msgs.msg import Marker
+from visualization_msgs.msg import Marker, MarkerArray
 
 
 def clamp(value: float, lower: float, upper: float) -> float:
     return max(lower, min(upper, value))
+
+
+def parse_people_detector_status(raw_status: str) -> Tuple[bool, str]:
+    try:
+        fields = json.loads(raw_status)
+    except (TypeError, ValueError):
+        return False, "invalid status JSON"
+    if not isinstance(fields, dict):
+        return False, "status is not a JSON object"
+    ready = fields.get("ready") is True
+    reason = str(fields.get("reason", "not ready" if not ready else "ready"))
+    return ready, reason
 
 
 def voxelized_laser_points(
@@ -287,6 +302,7 @@ class SocialNavDiffusionPolicyAdapter:
         checkpoint_path: str,
         norm_path: str,
         logger,
+        test_mode: bool = False,
     ):
         self.inference_repo = inference_repo
         self.config_path = config_path
@@ -294,6 +310,7 @@ class SocialNavDiffusionPolicyAdapter:
         self.checkpoint_path = checkpoint_path
         self.norm_path = norm_path
         self.logger = logger
+        self.test_mode = bool(test_mode)
         self.policy = None
         self.FullState = None
         self.JointState = None
@@ -459,6 +476,22 @@ class SocialNavDiffusionPolicyAdapter:
             "used_projection": bool(predicted.get("used_projection", False)),
         }
 
+    def all_candidate_trajectories_for_command(self) -> Optional[List[Any]]:
+        """All K diffusion candidate samples (world-frame), index 0 == selected."""
+        predicted = getattr(self.policy, "predicted_traj", None)
+        if not isinstance(predicted, dict):
+            return None
+        samples = predicted.get("all_samples")
+        if not samples:
+            return None
+        return [sample.copy() if hasattr(sample, "copy") else sample for sample in samples]
+
+    def last_planning_timing(self) -> Optional[Dict[str, float]]:
+        timing = getattr(self.policy, "last_predict_timing", None)
+        if not isinstance(timing, dict):
+            return None
+        return dict(timing)
+
     def sample_projected_trajectory(self, trajectory: Dict[str, Any], elapsed_sec: float) -> Optional[Dict[str, float]]:
         if self.policy is None or not hasattr(self.policy, "_interp_projected_state"):
             return None
@@ -487,7 +520,14 @@ class SocialNavDiffusionPolicyAdapter:
         os.environ.setdefault("ACADOS_SOURCE_DIR", "/home/ubuntu/acados")
         os.environ["LD_LIBRARY_PATH"] = os.environ.get("LD_LIBRARY_PATH", "") + ":/home/ubuntu/acados/lib"
 
-        from crowd_nav.policy.diffusion_CondUNetCFG import DiffusionConditionalUNet1DCFG
+        if self.test_mode:
+            from crowd_nav.policy.diffusion_CondUNetCFG_test_mode import (
+                DiffusionConditionalUNet1DCFG,
+            )
+        else:
+            from crowd_nav.policy.diffusion_CondUNetCFG import (
+                DiffusionConditionalUNet1DCFG,
+            )
         from crowd_sim.envs.utils.state import FullState, JointState, ObservableState
 
         config = configparser.RawConfigParser()
@@ -520,7 +560,7 @@ class SocialNavDiffusionPolicyAdapter:
                 else:
                     self.checkpoint_consistency_warning = (
                         "wrapper checkpoint differs from policy.config ckpt_path; collaborator should confirm "
-                        "whether the configured checkpoint file matches ckpt_step478000_SOCIAL_NORMS8.pt"
+                        f"whether the configured checkpoint file matches {self.policy_config_ckpt_path}"
                     )
             else:
                 self.checkpoint_consistency_warning = "wrapper checkpoint path and policy.config ckpt_path differ; one or both files are missing"
@@ -688,6 +728,8 @@ class PolicyCmdVelNode(Node):
     def __init__(self):
         super().__init__("policy_cmd_vel_node")
 
+        self.declare_parameter("test_mode", False)
+        self.test_mode = bool(self.get_parameter("test_mode").value)
         self.declare_parameter("control_mode", "raw_eval")
         self.declare_parameter("enable_goal_stop", True)
         self.declare_parameter("enable_speed_clamp", True)
@@ -748,6 +790,10 @@ class PolicyCmdVelNode(Node):
         self.declare_parameter("max_angular_accel", 3.14)
         self.declare_parameter("cmd_frame_id", "base_link")
         self.declare_parameter("people_topic", "/people")
+        self.declare_parameter(
+            "people_detector_status_topic",
+            "/people_detector/status",
+        )
         self.declare_parameter("odom_topic", "/cpr_j100_0001/platform/odom/filtered")
         self.declare_parameter("map_topic", "/cpr_j100_0001/map")
         self.declare_parameter("goal_topic", "/goal_pose")
@@ -756,13 +802,34 @@ class PolicyCmdVelNode(Node):
         self.declare_parameter("active_goal_marker_topic", "/social_nav_diffusion/active_goal_marker")
         self.declare_parameter("projected_trajectory_topic", "/social_nav_diffusion/projected_trajectory")
         self.declare_parameter("predicted_trajectory_topic", "/social_nav_diffusion/predicted_trajectory")
+        self.declare_parameter("candidate_trajectories_topic", "/social_nav_diffusion/candidate_trajectories")
         self.declare_parameter("policy_debug_topic", "/social_nav_diffusion/policy_debug")
+        self.declare_parameter("style_vector_topic", "/social_nav_diffusion/style_vector")
+        # Social style vector, order matches policy.config: prox, pass, yield, group.
+        # Live-tunable via `ros2 param set <node> style_vector [...]` without
+        # restarting the node or reloading the model (see apply_style_vector()).
+        self.declare_parameter("style_vector", [0.0, 0.0, 0.0, 0.0])
         self.declare_parameter("use_diffusion_policy", False)
         self.declare_parameter("diffusion_inference_repo", INFERENCE_REPO_DEFAULT)
-        self.declare_parameter("diffusion_config_path", f"{INFERENCE_REPO_DEFAULT}/crowd_nav/configs/policy.config")
+        default_policy_config = (
+            f"{INFERENCE_REPO_DEFAULT}/crowd_nav/configs/policy_test_mode.config"
+            if self.test_mode
+            else f"{INFERENCE_REPO_DEFAULT}/crowd_nav/configs/policy.config"
+        )
+        default_checkpoint = (
+            f"{INFERENCE_REPO_DEFAULT}/ckpt_step990000_sogudiff_singleaxis_1p5M.pt"
+            if self.test_mode
+            else f"{INFERENCE_REPO_DEFAULT}/ckpt_step478000_SOCIAL_NORMS8.pt"
+        )
+        default_norm = (
+            f"{INFERENCE_REPO_DEFAULT}/norm_stats_sogudiff_allarms_1p5M.npy"
+            if self.test_mode
+            else f"{INFERENCE_REPO_DEFAULT}/norm_stats_SOCIAL_NORMS8.npy"
+        )
+        self.declare_parameter("diffusion_config_path", default_policy_config)
         self.declare_parameter("diffusion_env_config_path", f"{INFERENCE_REPO_DEFAULT}/crowd_nav/configs/env.config")
-        self.declare_parameter("diffusion_checkpoint_path", f"{INFERENCE_REPO_DEFAULT}/ckpt_step478000_SOCIAL_NORMS8.pt")
-        self.declare_parameter("diffusion_norm_path", f"{INFERENCE_REPO_DEFAULT}/norm_stats_SOCIAL_NORMS8.npy")
+        self.declare_parameter("diffusion_checkpoint_path", default_checkpoint)
+        self.declare_parameter("diffusion_norm_path", default_norm)
         self.declare_parameter("target_policy_frame", "map")
         self.declare_parameter("enable_tf_transforms", True)
         self.declare_parameter("tf_lookup_timeout_sec", 0.1)
@@ -809,6 +876,9 @@ class PolicyCmdVelNode(Node):
         self.command_hold_timeout = float(self.get_parameter("command_hold_timeout_sec").value)
         self.cmd_frame_id = str(self.get_parameter("cmd_frame_id").value)
         self.people_topic = str(self.get_parameter("people_topic").value)
+        self.people_detector_status_topic = str(
+            self.get_parameter("people_detector_status_topic").value
+        )
         self.odom_topic = str(self.get_parameter("odom_topic").value)
         self.map_topic = str(self.get_parameter("map_topic").value)
         self.goal_topic = str(self.get_parameter("goal_topic").value)
@@ -817,8 +887,13 @@ class PolicyCmdVelNode(Node):
         self.active_goal_marker_topic = str(self.get_parameter("active_goal_marker_topic").value)
         self.projected_trajectory_topic = str(self.get_parameter("projected_trajectory_topic").value)
         self.predicted_trajectory_topic = str(self.get_parameter("predicted_trajectory_topic").value)
+        self.candidate_trajectories_topic = str(self.get_parameter("candidate_trajectories_topic").value)
         self.policy_debug_topic = str(self.get_parameter("policy_debug_topic").value)
         self.use_diffusion_policy = bool(self.get_parameter("use_diffusion_policy").value)
+        self.planning_timing_window: Deque[Dict[str, float]] = collections.deque(maxlen=50)
+        self.current_style_vector: List[float] = [0.0, 0.0, 0.0, 0.0]
+        if self.test_mode:
+            self.add_on_set_parameters_callback(self._on_set_parameters)
         self.diffusion_adapter: Optional[SocialNavDiffusionPolicyAdapter] = None
         self._last_source_log_time = 0.0
         self._last_hold_log_time = 0.0
@@ -930,7 +1005,10 @@ class PolicyCmdVelNode(Node):
                     checkpoint_path=str(self.get_parameter("diffusion_checkpoint_path").value),
                     norm_path=str(self.get_parameter("diffusion_norm_path").value),
                     logger=self.get_logger(),
+                    test_mode=self.test_mode,
                 )
+                if self.test_mode:
+                    self.apply_style_vector(list(self.get_parameter("style_vector").value))
             except Exception as exc:
                 self.get_logger().error(
                     f"diffusion model failed to load; falling back to placeholder policy: {type(exc).__name__}: {exc}\n"
@@ -945,6 +1023,9 @@ class PolicyCmdVelNode(Node):
         self.latest_people: List = []
         self.latest_people_time: Optional[float] = None
         self.latest_people_frame_id = ""
+        self.latest_people_detector_status_time: Optional[float] = None
+        self.latest_people_detector_ready = False
+        self.latest_people_detector_reason = "no status received"
         self.latest_map: Optional[OccupancyGrid] = None
         self.latest_map_time: Optional[float] = None
         self.latest_goal: Optional[PoseStamped] = None
@@ -989,6 +1070,12 @@ class PolicyCmdVelNode(Node):
         self.last_sign_conflict_desired_w = float("nan")
 
         self.create_subscription(People, self.people_topic, self.people_callback, 10)
+        self.create_subscription(
+            String,
+            self.people_detector_status_topic,
+            self.people_detector_status_callback,
+            10,
+        )
         self.create_subscription(Odometry, self.odom_topic, self.odom_callback, 20)
         self.create_subscription(
             OccupancyGrid,
@@ -1010,7 +1097,28 @@ class PolicyCmdVelNode(Node):
         self.active_goal_marker_pub = self.create_publisher(Marker, self.active_goal_marker_topic, 10)
         self.projected_trajectory_pub = self.create_publisher(Path, self.projected_trajectory_topic, 10)
         self.predicted_trajectory_pub = self.create_publisher(Path, self.predicted_trajectory_topic, 10)
+        self.candidate_trajectories_pub = None
         self.policy_debug_pub = self.create_publisher(String, self.policy_debug_topic, 10)
+        self.style_vector_pub = None
+        if self.test_mode:
+            self.candidate_trajectories_pub = self.create_publisher(
+                MarkerArray,
+                self.candidate_trajectories_topic,
+                10,
+            )
+            self.style_vector_pub = self.create_publisher(
+                Float32MultiArray,
+                str(self.get_parameter("style_vector_topic").value),
+                QoSProfile(
+                    history=HistoryPolicy.KEEP_LAST,
+                    depth=1,
+                    reliability=ReliabilityPolicy.RELIABLE,
+                    durability=DurabilityPolicy.TRANSIENT_LOCAL,
+                ),
+            )
+            # The startup apply happens before publisher setup; publish once
+            # here so late-starting test tools receive the active vector.
+            self.publish_style_vector_topic(self.current_style_vector)
         self.cmd_timer = self.create_timer(self.cmd_publish_period, self.command_publish_callback)
         self.policy_debug_timer = self.create_timer(1.0, self.policy_debug_callback)
         self.diffusion_timer = None
@@ -1312,6 +1420,12 @@ class PolicyCmdVelNode(Node):
         header = getattr(msg, "header", None)
         self.latest_people_frame_id = getattr(header, "frame_id", "") if header is not None else ""
 
+    def people_detector_status_callback(self, msg: String):
+        ready, reason = parse_people_detector_status(msg.data)
+        self.latest_people_detector_status_time = self.now_sec()
+        self.latest_people_detector_ready = ready
+        self.latest_people_detector_reason = reason
+
     def map_callback(self, msg: OccupancyGrid):
         self.latest_map = msg
         self.latest_map_time = self.now_sec()
@@ -1423,6 +1537,57 @@ class PolicyCmdVelNode(Node):
             f"frame={self.latest_goal.header.frame_id}, position_delta={self.last_goal_position_delta:.3f}, "
             f"orientation_delta={self.last_goal_orientation_delta:.3f}"
         )
+
+    def apply_style_vector(self, values: List[float]) -> List[float]:
+        """Push a clipped 4-vector (prox, pass, yield, group) into the live
+        policy instance. Read fresh every predict() call
+        (diffusion_CondUNetCFG.py), so this takes effect on the next
+        inference tick with no model reload."""
+        vector = [0.0, 0.0, 0.0, 0.0]
+        for index in range(min(4, len(values))):
+            vector[index] = clamp(float(values[index]), -1.0, 1.0)
+        if (
+            self.diffusion_adapter is not None
+            and self.diffusion_adapter.policy is not None
+            and hasattr(self.diffusion_adapter.policy, "style_vector")
+        ):
+            self.diffusion_adapter.policy.style_vector = list(vector)
+            self.get_logger().info(
+                f"style_vector applied: prox={vector[0]:.2f}, pass={vector[1]:.2f}, "
+                f"yield={vector[2]:.2f}, group={vector[3]:.2f}"
+            )
+        self.current_style_vector = vector
+        # style_vector_pub is created later in __init__ (adapter construction
+        # happens before publisher setup); guard so the startup call is a
+        # no-op and the republish right after publisher creation covers it.
+        if getattr(self, "style_vector_pub", None) is not None:
+            self.publish_style_vector_topic(vector)
+        return vector
+
+    def publish_style_vector_topic(self, vector: List[float]):
+        # TRANSIENT_LOCAL so a late-starting subscriber (e.g. ps4_nav_trigger_node,
+        # which uses this to attribute recorded bags to a style) still gets the
+        # current value immediately without waiting for the next change.
+        if self.style_vector_pub is None:
+            return
+        msg = Float32MultiArray()
+        msg.data = [float(v) for v in vector]
+        self.style_vector_pub.publish(msg)
+
+    def _on_set_parameters(self, params) -> SetParametersResult:
+        for param in params:
+            if param.name != "style_vector":
+                continue
+            values = list(param.value)
+            if len(values) != 4:
+                return SetParametersResult(
+                    success=False,
+                    reason="style_vector must have exactly 4 values: prox, pass, yield, group",
+                )
+        for param in params:
+            if param.name == "style_vector":
+                self.apply_style_vector(list(param.value))
+        return SetParametersResult(success=True)
 
     def build_robot_state(self) -> Dict[str, float]:
         pose = self.latest_odom.pose.pose
@@ -2127,6 +2292,77 @@ class PolicyCmdVelNode(Node):
         self.last_predicted_trajectory_available = True
         self.last_predicted_trajectory_point_count = len(path.poses)
 
+    # One uniform, muted color for every candidate so the K samples read as
+    # a single "family" distinct from the projected path (green) and the
+    # selected raw path (orange) — not a rainbow that implies per-index
+    # meaning the samples don't actually have.
+    CANDIDATE_TRAJECTORY_COLOR = (0.65, 0.65, 0.70)  # light steel gray
+
+    def publish_candidate_trajectories_markers(
+        self,
+        samples: Optional[List[Any]],
+        result_stamp_sec: float,
+    ):
+        if self.candidate_trajectories_pub is None:
+            return
+        markers = MarkerArray()
+        delete_all = Marker()
+        delete_all.action = Marker.DELETEALL
+        markers.markers.append(delete_all)
+
+        stamp = self.time_msg_from_sec(result_stamp_sec)
+        if samples:
+            for index, sample in enumerate(samples):
+                try:
+                    point_count = len(sample)
+                except TypeError:
+                    point_count = 0
+                if point_count < 2:
+                    continue
+                marker = Marker()
+                marker.header.frame_id = self.target_policy_frame
+                marker.header.stamp = stamp
+                marker.ns = "candidate_trajectory"
+                marker.id = index
+                marker.type = Marker.LINE_STRIP
+                marker.action = Marker.ADD
+                marker.pose.orientation.w = 1.0
+                marker.scale.x = 0.02
+                marker.color.r, marker.color.g, marker.color.b = self.CANDIDATE_TRAJECTORY_COLOR
+                # Uniform alpha for every candidate, including index 0 (the
+                # selected sample) — it's already drawn opaque orange by the
+                # Raw Predicted Trajectory Path, so no extra emphasis needed
+                # here; that keeps this whole marker set visually "one thing."
+                marker.color.a = 0.45
+                marker.lifetime = Duration(seconds=0.5).to_msg()
+                for point in sample:
+                    p = Point()
+                    p.x = float(point[0])
+                    p.y = float(point[1])
+                    p.z = 0.02
+                    marker.points.append(p)
+                markers.markers.append(marker)
+
+        self.candidate_trajectories_pub.publish(markers)
+
+    def planning_timing_averages(self) -> Dict[str, float]:
+        """Rolling averages over the last <=50 predict() calls, for logging."""
+        window = self.planning_timing_window
+        if not window:
+            return {
+                "diffusion_ms_avg": float("nan"),
+                "projection_ms_avg": float("nan"),
+                "planning_ms_avg": float("nan"),
+                "planning_timing_samples": 0,
+            }
+        count = len(window)
+        return {
+            "diffusion_ms_avg": sum(float(t.get("diffusion_ms", 0.0)) for t in window) / count,
+            "projection_ms_avg": sum(float(t.get("projection_ms", 0.0)) for t in window) / count,
+            "planning_ms_avg": sum(float(t.get("total_ms", 0.0)) for t in window) / count,
+            "planning_timing_samples": count,
+        }
+
     def policy_debug_callback(self):
         now = self.now_sec()
         robot_x = robot_y = robot_yaw = float("nan")
@@ -2366,6 +2602,10 @@ class PolicyCmdVelNode(Node):
             "sign_conflict_desired_w": self.last_sign_conflict_desired_w,
             "sign_conflict_linear_scale": float(self.get_parameter("sign_conflict_linear_scale").value),
         }
+        if self.test_mode:
+            fields["test_mode"] = True
+            fields["style_vector"] = list(self.current_style_vector)
+            fields.update(self.planning_timing_averages())
 
         msg = String()
         msg.data = ", ".join(f"{key}={self.format_debug_value(value)}" for key, value in fields.items())
@@ -2507,11 +2747,27 @@ class PolicyCmdVelNode(Node):
             return None, f"goal timed out: older than {goal_timeout:.1f}s"
         ignore_people = bool(self.get_parameter("ignore_people_for_policy").value)
         require_people = bool(self.get_parameter("require_people_stream").value)
+        people_status_stale = self.data_is_stale(
+            self.latest_people_detector_status_time,
+            now,
+            stale_timeout,
+        )
         people_stale = self.data_is_stale(
             self.latest_people_time,
             now,
             stale_timeout,
         )
+        if not ignore_people and require_people and people_status_stale:
+            return None, "required people detector status is missing or stale"
+        if (
+            not ignore_people
+            and require_people
+            and not self.latest_people_detector_ready
+        ):
+            return None, (
+                "people detector is not ready: "
+                f"{self.latest_people_detector_reason}"
+            )
         if not ignore_people and require_people and people_stale:
             return None, "required /people stream is missing or stale"
         if people_stale and now - self._last_source_log_time > 1.0:
@@ -2887,6 +3143,17 @@ class PolicyCmdVelNode(Node):
                 result_stamp,
                 self.last_projected_trajectory_dt,
             )
+            if self.test_mode:
+                candidate_trajectories = (
+                    self.diffusion_adapter.all_candidate_trajectories_for_command()
+                )
+                self.publish_candidate_trajectories_markers(
+                    candidate_trajectories,
+                    result_stamp,
+                )
+                planning_timing = self.diffusion_adapter.last_planning_timing()
+                if planning_timing is not None:
+                    self.planning_timing_window.append(planning_timing)
             self.set_latest_policy_cmd(
                 v, w, result_stamp, duration, projected_trajectory,
                 trajectory_origin_stamp=trajectory_origin_stamp,

@@ -35,10 +35,12 @@ setup(
     entry_points={
         'console_scripts': [
             'social_nav_diffusion_node = social_nav_diffusion_ros.social_nav_diffusion_node:main',
+            'social_nav_diffusion_node_test_mode = social_nav_diffusion_ros.social_nav_diffusion_node_test_mode:main',
             'policy_cmd_vel_node = social_nav_diffusion_ros.policy_cmd_vel_node:main',
             'nav2_goal_to_pose_bridge = social_nav_diffusion_ros.nav2_goal_to_pose_bridge:main',
             'jackal_twist_adapter = social_nav_diffusion_ros.jackal_twist_adapter:main',
             'rgbd_people_detector = social_nav_diffusion_ros.rgbd_people_detector:main',
+            'ps4_nav_trigger_node = social_nav_diffusion_ros.ps4_nav_trigger_node:main',
         ],
     },
 )

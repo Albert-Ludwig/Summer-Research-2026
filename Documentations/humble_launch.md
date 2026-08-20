@@ -15,9 +15,24 @@ VNC: http://127.0.0.1:6084/vnc.html?autoconnect=1&resize=scale
 
 Run in Windows PowerShell:
 
+### Stable Humble Mode
+
 ```powershell
 python "C:\Users\Administrator\Documents\Summer Research 2026\Documentations\run_jackal_robohub.py"
 ```
+
+This keeps `test_mode: false` and uses the stable Humble workflow with an RViz
+`Nav2 Goal`.
+
+### Teammate Test Mode
+
+```powershell
+python "C:\Users\Administrator\Documents\Summer Research 2026\Documentations\run_jackal_teammate_test.py"
+```
+
+This forces `test_mode: true`. It uses the teammate checkpoint, PS4 fixed-goal
+trigger, style vector, trajectory visualization, timing output, and per-run
+MCAP recording. The complete test checkpoint must be present before launch.
 
 The Python launcher starts:
 

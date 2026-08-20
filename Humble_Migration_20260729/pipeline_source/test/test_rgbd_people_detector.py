@@ -1,3 +1,4 @@
+import threading
 from types import SimpleNamespace
 
 import numpy as np
@@ -201,3 +202,36 @@ def test_yolo_backend_requests_only_people_and_returns_boxes():
     assert model.kwargs['imgsz'] == 640
     assert model.kwargs['device'] == 'cpu'
     assert 'half' not in model.kwargs
+
+
+def test_stale_rgbd_status_does_not_publish_empty_people_as_valid_data():
+    published_people = []
+    published_status = []
+    parameters = {
+        'track_timeout_sec': SimpleNamespace(value=0.75),
+        'source_timeout_sec': SimpleNamespace(value=1.0),
+    }
+    detector = SimpleNamespace(
+        enable_lidar_fusion=False,
+        tracks={},
+        track_lock=threading.Lock(),
+        now_sec=lambda: 30.0,
+        get_parameter=lambda name: parameters[name],
+        latest_color_receive=29.9,
+        latest_depth_receive=5.0,
+        latest_info_receive=5.0,
+        last_successful_inference_receive=5.0,
+        last_lidar_receive=29.9,
+        last_inference_fields={'ready': True},
+        last_lidar_point_count=100,
+        last_lidar_track_updates=0,
+        last_lidar_error='',
+        publish_people=lambda tracks, stamp: published_people.append((tracks, stamp)),
+        publish_status=lambda **fields: published_status.append(fields),
+    )
+
+    RgbdPeopleDetector.people_publish_callback(detector)
+
+    assert published_people == []
+    assert published_status[-1]['ready'] is False
+    assert published_status[-1]['reason'] == 'rgbd_source_stale'

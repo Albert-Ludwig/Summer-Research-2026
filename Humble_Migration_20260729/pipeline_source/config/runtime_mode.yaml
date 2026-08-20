@@ -1,0 +1,3 @@
+runtime:
+  # false: stable4 behavior; true: teammate JackalUpdate08-18 behavior.
+  test_mode: false

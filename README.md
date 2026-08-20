@@ -24,7 +24,7 @@ https://github.com/schaiblc/SocialNavDiffusion_Inference.git
 
 ## Environment And Rebuild Reference
 
-Last audited: **2026-08-18**
+The password for JACKAL SSH is: **clearpath**
 
 Quick index:
 
@@ -38,10 +38,10 @@ Quick index:
 
 This is the recovery manual for both validated environments:
 
-| Environment | Purpose | Docker engine |
-|---|---|---|
-| ROS 2 Jazzy | HuNav, Gazebo, and Jackal simulation | Docker Desktop |
-| ROS 2 Humble | Real Jackal and RoboHub testing | Native Docker in `Ubuntu-22.04` WSL |
+| Environment  | Purpose                              | Docker engine                       |
+| ------------ | ------------------------------------ | ----------------------------------- |
+| ROS 2 Jazzy  | HuNav, Gazebo, and Jackal simulation | Docker Desktop                      |
+| ROS 2 Humble | Real Jackal and RoboHub testing      | Native Docker in `Ubuntu-22.04` WSL |
 
 Never copy `build/`, `install/`, `log/`, virtual environments, generated
 acados libraries, or compiled ROS binaries between Jazzy and Humble.
@@ -112,11 +112,11 @@ listed in this README.
 `*.pt` is intentionally ignored by Git. Restore these assets before creating
 either Python environment:
 
-| Asset | Path under `SocialNavDiffusion_Inference` | Size | SHA256 |
-|---|---|---:|---|
-| Diffusion checkpoint | `SocialGuidedNavPlanner.pt` | 358,855,529 bytes | `e60371f69ea096a0a7ebed512f0dcbbc6d03a7c9c1b72e65261aff0417e5c1e6` |
-| Normalization data | `norm_stats_SOCIAL_NORMS8.npy` | 725 bytes | `0eac9b2e7080db7dde83c85577cbe6f105aab9fa54804ac6935f07702b2ed935` |
-| YOLO detector | `yolo11n.pt` | 5,613,764 bytes | `0ebbc80d4a7680d14987a577cd21342b65ecfd94632bd9a8da63ae6417644ee1` |
+| Asset                | Path under `SocialNavDiffusion_Inference` |              Size | SHA256                                                             |
+| -------------------- | ----------------------------------------- | ----------------: | ------------------------------------------------------------------ |
+| Diffusion checkpoint | `SocialGuidedNavPlanner.pt`               | 358,855,529 bytes | `e60371f69ea096a0a7ebed512f0dcbbc6d03a7c9c1b72e65261aff0417e5c1e6` |
+| Normalization data   | `norm_stats_SOCIAL_NORMS8.npy`            |         725 bytes | `0eac9b2e7080db7dde83c85577cbe6f105aab9fa54804ac6935f07702b2ed935` |
+| YOLO detector        | `yolo11n.pt`                              |   5,613,764 bytes | `0ebbc80d4a7680d14987a577cd21342b65ecfd94632bd9a8da63ae6417644ee1` |
 
 The runtime checkpoint name is a relative symbolic link:
 
@@ -307,15 +307,15 @@ expose this port to an untrusted network.
 
 ### Humble Source Revisions
 
-| Component | Repository | Revision |
-|---|---|---|
-| HuNavSim | `https://github.com/robotics-upo/hunav_sim.git` | `d97ac2c96b5de1ef9cd8835f99718504a4a005ae` |
-| Fortress wrapper | `https://github.com/robotics-upo/hunav_gazebo_fortress_wrapper.git` | `e6160a9d8a91f2ee4fde39ff5879507acec17cd8` |
-| LightSFM | `https://github.com/robotics-upo/lightsfm.git` | `b30327cca189af2fb90443a5d0040cceb46d7195` |
-| people_msgs | `https://github.com/wg-perception/people.git`, branch `ros2` | `0ae47f6e0208cedd84d19d066743fdc1d05fcafa` |
-| acados | `https://github.com/acados/acados.git` | `dab96fc9b8ad486af8166331259834b33e93de37` |
-| ROS wrapper | `Humble_Migration_20260729/pipeline_source` | this repository's selected revision |
-| Model source | `SocialNavDiffusion_Inference` | upstream `c785225ee545d79ea63fa06ca8a025b3e5a536ed` plus tracked project changes |
+| Component        | Repository                                                          | Revision                                                                         |
+| ---------------- | ------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| HuNavSim         | `https://github.com/robotics-upo/hunav_sim.git`                     | `d97ac2c96b5de1ef9cd8835f99718504a4a005ae`                                       |
+| Fortress wrapper | `https://github.com/robotics-upo/hunav_gazebo_fortress_wrapper.git` | `e6160a9d8a91f2ee4fde39ff5879507acec17cd8`                                       |
+| LightSFM         | `https://github.com/robotics-upo/lightsfm.git`                      | `b30327cca189af2fb90443a5d0040cceb46d7195`                                       |
+| people_msgs      | `https://github.com/wg-perception/people.git`, branch `ros2`        | `0ae47f6e0208cedd84d19d066743fdc1d05fcafa`                                       |
+| acados           | `https://github.com/acados/acados.git`                              | `dab96fc9b8ad486af8166331259834b33e93de37`                                       |
+| ROS wrapper      | `Humble_Migration_20260729/pipeline_source`                         | this repository's selected revision                                              |
+| Model source     | `SocialNavDiffusion_Inference`                                      | upstream `c785225ee545d79ea63fa06ca8a025b3e5a536ed` plus tracked project changes |
 
 Two Humble compatibility patches are tracked in
 `Humble_Migration_20260729/hunav_humble_patches`.
@@ -560,13 +560,13 @@ docker run -d `
 
 ### Jazzy Source Revisions
 
-| Component | Repository | Revision |
-|---|---|---|
-| HuNavSim | `https://github.com/robotics-upo/hunav_sim.git` | `8ecd594d57e921ce735d330782a008b7850672c5` |
-| Fortress wrapper | `https://github.com/robotics-upo/hunav_gazebo_fortress_wrapper.git` | `41f97f764df00303a85227911ec8173f0c25c758` |
-| people_msgs | `https://github.com/wg-perception/people.git`, branch `ros2` | `0ae47f6e0208cedd84d19d066743fdc1d05fcafa` |
-| Pipeline baseline | `https://git.uwaterloo.ca/Johnson_Ji/jackal_peronal.git` | `9319eb444605be711d2f96f19c48f839c0ab40e9` |
-| acados | `https://github.com/acados/acados.git` | `dab96fc9b8ad486af8166331259834b33e93de37` |
+| Component         | Repository                                                          | Revision                                   |
+| ----------------- | ------------------------------------------------------------------- | ------------------------------------------ |
+| HuNavSim          | `https://github.com/robotics-upo/hunav_sim.git`                     | `8ecd594d57e921ce735d330782a008b7850672c5` |
+| Fortress wrapper  | `https://github.com/robotics-upo/hunav_gazebo_fortress_wrapper.git` | `41f97f764df00303a85227911ec8173f0c25c758` |
+| people_msgs       | `https://github.com/wg-perception/people.git`, branch `ros2`        | `0ae47f6e0208cedd84d19d066743fdc1d05fcafa` |
+| Pipeline baseline | `https://git.uwaterloo.ca/Johnson_Ji/jackal_peronal.git`            | `9319eb444605be711d2f96f19c48f839c0ab40e9` |
+| acados            | `https://github.com/acados/acados.git`                              | `dab96fc9b8ad486af8166331259834b33e93de37` |
 
 The audited Jazzy pipeline has local changes beyond `9319eb4`. The exact
 workspace is preserved by the custom image, not by that GitLab commit alone.

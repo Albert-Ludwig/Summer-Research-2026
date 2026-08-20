@@ -539,3 +539,115 @@ http://127.0.0.1:6084/vnc.html?autoconnect=1&resize=scale
 - Teammate model source, checkpoint, acados settings, static obstacle budget (`k_static=20`), Nav2 parameters, and Jazzy were not modified.
 - Focused tests passed: 5 RGB-D tests and 16 QoS/LiDAR/adapter tests. Final Humble `social_nav_diffusion_ros` build passed.
 - Windows persistent source and `jackal_robohub` runtime copies have matching SHA256 hashes for all six synchronized files. Changes are not committed or pushed.
+
+## 2026-08-19 Teammate Test Mode Integration
+
+- Compared stable4 with `schaiblc/JackalUpdate08-18` commit `5239a07`.
+- Added `config/runtime_mode.yaml`; `test_mode: false` keeps stable4 behavior and
+  `test_mode: true` selects the teammate experiment path.
+- Kept the stable model core and config unchanged. Added isolated
+  `diffusion_CondUNetCFG_test_mode.py`, `projection_solver_test_mode.py`, and
+  `policy_test_mode.config` files for the new checkpoint/SQP behavior.
+- Added the PS4 fixed-goal trigger, nav-output gate, live style vector,
+  candidate trajectories, people radius/1.6 s velocity markers, timing
+  averages, test RViz, and per-run MCAP recording only in test mode.
+- Fixed the teammate detector's out-of-scope `yolo_ms` status bug.
+- Installed `ros-humble-rosbag2-storage-mcap` in `jackal_robohub` (about 1 MB).
+- Humble package build passed. New model import passed. Focused regression:
+  `35 passed`.
+- Stable checkpoint/norm are present. Test mode remains blocked until
+  `ckpt_step990000_sogudiff_singleaxis_1p5M.pt` and
+  `norm_stats_sogudiff_allarms_1p5M.npy` are supplied separately.
+- No navigation node was started and no real `cmd_vel` was published.
+
+## 2026-08-19 Teammate Test Mode Real Jackal Run
+
+- Started the complete teammate test mode with `run_jackal_teammate_test.py`.
+- Jackal onboard localization published a valid `789 x 673` map. RViz `2D Pose Estimate` established a valid `map -> base_link` transform before navigation started.
+- The test checkpoint `ckpt_step990000_sogudiff_singleaxis_1p5M.pt` and its normalization file loaded successfully on CUDA.
+- Policy warm-up completed in `11.220 s`; DDIM warm-up took `10065.6 ms`, and acados projection returned `status=0`.
+- RGB-D person detection published live `/people`. The final Jackal command adapter enabled output with limits `1.0 m/s` linear and `3.14 rad/s` angular.
+- PS4 test mode used `/jackal1/joy_teleop/joy`, Options button index `7`, a fixed goal `6 m` ahead, and style vector `[0, 0, 0, 0]`.
+- The robot accepted the PS4-triggered goal and moved successfully during the real test.
+- The complete automatic MCAP recording is under `bags/run_20260819_195454_547967_prox0.00_pass0.00_yield0.00_group0.00`.
+- The retained bag is `12.383 s`, contains `2662` messages, and is about `1.14 MB`. It includes `/people`, candidate, predicted and projected trajectories, goal, command velocity, filtered odometry, TF, detector status, and active-goal marker messages.
+- One test produced five bag directories because the Options input generated repeated start events. Four empty or short recordings were deleted; only the complete bag above remains. This trigger behavior must be fixed before the next formal run.
+- The bag contains ROS data only, not a screen video. For the teammate deliverable, replay it later with only RViz and `ros2 bag play --clock`, then record the RViz playback. Diffusion, YOLO, RealSense and live localization do not need to run during playback.
+- The current implementation still requires localization and `2D Pose Estimate`: the goal, policy, people, map conditioning and RViz all use the `map` frame. A controller-generated goal replaces RViz goal placement, not localization.
+- The control policy and adapter stopped before shutdown. `jackal_robohub` and WSL are stopped, and no rosbag or autonomous velocity process remains active.
+
+## 2026-08-20 Current Handoff: Teammate Acceptance Test And Recording
+
+### Current State
+
+- The teammate test checkpoint and normalization file are now present and load correctly. The earlier note saying test mode is blocked by missing files is obsolete.
+- Use `Documentations/run_jackal_teammate_test.py` for the teammate experiment. It forces `test_mode: true` while preserving the stable mode separately.
+- Live mode still requires the saved map and RViz `2D Pose Estimate`. The generated controller goal replaces manual RViz goal placement; it does not replace localization because the goal, policy, people, map conditioning and RViz use frame `map`.
+- Verified PS4 input is `/jackal1/joy_teleop/joy`. Options is button index `7`; Clearpath deadman is index `4` and turbo is index `5`.
+- The successful run used a fixed goal `6 m` ahead and style vector `[prox, pass, yield, group] = [0, 0, 0, 0]`.
+- CUDA model warm-up, Diffusion, acados projection, RGB-D detector, PS4 trigger and final Jackal adapter all started successfully. The real Jackal accepted the trigger and moved.
+- The current live RViz config remains `/workspace/config_files/jackal_robohub_navigation.rviz`. Do not replace it with the teammate RViz file during live startup. The teammate trajectory RViz config is used only for offline playback.
+- Current shutdown state: `jackal_robohub` is stopped, WSL is stopped, and no ROS, rosbag or real velocity process is active.
+
+### Teammate Acceptance Requirements
+
+- Press PS4 Options to start or stop autonomous navigation. Do not place the navigation goal manually in RViz.
+- Generate a configurable fixed goal ahead of the robot. The default test distance is `6 m`.
+- Make goal distance and style vector configurable for every launch. Style order is `prox, pass, yield, group`, with each value clipped to `[-1, 1]`.
+- Run one controlled human-interaction test: no chair and no other obstacle; one person walks slowly toward the Jackal. The robot should detect the person, navigate around them, and continue to the goal.
+- RViz must show the active goal, all sampled/candidate Diffusion trajectories, the selected/raw predicted trajectory, the acados projected trajectory, detected people, and the robot's past odometry trail. These elements must be clearly distinguishable by color.
+- Each detected person should appear as a circle with radius `0.25 m` and an arrow showing constant-velocity motion over a `1.6 s` horizon.
+- Record a narrow MCAP bag rather than raw RGB/depth. Required data includes TF, filtered odometry, `/people`, detector status, goal, debug/final velocity, policy debug, predicted trajectory and projected trajectory. Candidate trajectories, people markers, active-goal marker and the odometry trail source must also be available for the requested RViz visualization.
+- Report YOLO inference time, Diffusion sampling time, acados projection time, complete planning time and average behavior during the run.
+- Confirm the MCAP can be replayed. Record the offline RViz playback and send that screen video together with a separate external real-world video of the Jackal run.
+- Confirm human tracking and prediction are reasonable and that no control or recording bugs were introduced.
+
+### Retained Run And Recording
+
+- The only retained MCAP is `bags/run_20260819_195454_547967_prox0.00_pass0.00_yield0.00_group0.00`.
+- It is `12.383 s`, about `1.14 MB`, and contains `2662` messages.
+- It contains goal, commands, filtered odometry, namespaced TF, candidate trajectories, predicted trajectory, projected trajectory, policy debug, detector status, people messages, people markers and active-goal markers.
+- The verified offline RViz video is `bags/recordings/social_nav_rviz_playback_run_20260819_195454.mp4`.
+- The video is `18 s`, `1280 x 720`, and about `0.61 MB`. Visual inspection confirmed the active goal, candidate trajectories, selected/predicted trajectory, projected trajectory and odometry trail are visible.
+- Offline playback uses `Humble_Migration_20260729/pipeline_source/config/social_nav_trajectories_test_mode.rviz`. It does not modify the stable live RViz configuration.
+- The container now has `ros-humble-rmw-cyclonedds-cpp` plus six small dependencies installed: `8.4 MB` total. Offline playback must use `RMW_IMPLEMENTATION=rmw_cyclonedds_cpp`, `ROS_DOMAIN_ID=99` and `ROS_LOCALHOST_ONLY=1`. This isolates playback from the real Jackal on domain `0`.
+- Fast DDS local discovery did not work without the Jackal discovery server. Cyclone DDS local publisher/subscriber communication was verified before recording.
+- The container exposes the NVIDIA GPU, but FFmpeg could not load `libnvidia-encode.so.1`. The final short recording used `libx264`, preset `ultrafast`, at `1280 x 720`, `20 FPS`. Diffusion, YOLO, camera and live localization were not running, so recording RAM use remained low.
+
+### Known Gaps
+
+- The retained bag has `56` `/people` messages and `55` people-marker messages, but all are empty. It does not demonstrate a detected person, human tracking or human trajectory prediction.
+- The retained bag does not include the saved occupancy map or robot-description data. Offline RViz therefore shows the grid and recorded trajectories but not the complete map or Jackal RobotModel.
+- No synchronized external real-world video was recorded for this run.
+- One Options operation created five bag directories. Four were empty or only a few seconds long and were deleted. Only the complete bag remains. Repeated start events are still a known trigger issue. The user explicitly rejected adding generic time-based debounce; diagnose and fix the actual button edge/reconnect behavior before the formal run.
+- The current RViz playback video is useful for verifying MCAP playback and trajectory visualization, but it is not the final teammate acceptance video because no person was detected.
+
+### Failure Assessment And Revised Recording Plan
+
+- This was not a rosbag or video-encoding failure. Automatic MCAP creation, MCAP playback, trajectory visualization and MP4 generation all worked.
+- The run failed the teammate's acceptance criteria because it did not capture a human interaction. All recorded `/people` messages contained empty people lists, and all recorded people-marker arrays contained no actual person markers.
+- A chair or other object is not a substitute for this test. YOLO is configured for person class only, so the formal run must use one real person who is visibly detected before navigation starts.
+- The narrow recorder omitted the occupancy map and robot-description data. The resulting offline video can show the goal, candidate, selected/predicted, projected and odometry trajectories, but it cannot reconstruct the complete map and Jackal RobotModel.
+- The Options signal also generated several start events and several short or empty bag directories. Do not hide this with a generic time-based debounce. Fix the true rising-edge, reconnect or repeated-message handling so one physical Options press creates exactly one accepted goal and one bag.
+- The next recorder update should minimally add the real live topics for the saved map, robot description and joint states, plus candidate trajectories, people markers and active-goal marker. Verify the exact Jackal topic names live before editing the recorder. Continue excluding raw RGB and depth images to protect RAM.
+- Before pressing Options in the next run, require a manual readiness check: `/people` must contain at least one person, the RViz person circle must be visible, and the `1.6 s` velocity-horizon arrow must point in a reasonable direction.
+- Start the separate external camera video before pressing Options. Use one person walking slowly toward the Jackal, with no chair or unrelated obstacle in the course.
+- After the run, do not delete any bag immediately. First identify the complete directory, verify duration and closure, confirm non-empty human messages, confirm all required trajectory/map/robot topics, and extract YOLO and planning timing data.
+- Only after these checks should extra empty bags be removed. Replay the accepted MCAP with isolated Cyclone DDS and generate the final RViz MP4.
+- The final acceptance package must contain the complete MCAP directory, synchronized external real-world video, offline RViz playback video, goal/style settings, YOLO timing, Diffusion timing, projection timing, total-planning timing and a short assessment of human prediction and avoidance behavior.
+- Treat the current retained MCAP and MP4 only as a successful recording-system smoke test, not as the final human-avoidance experiment.
+
+### Exact Next Test
+
+1. Connect the laptop to the Jackal and start `Documentations/run_jackal_teammate_test.py`.
+2. Wait for the saved map in RViz, then use `2D Pose Estimate` to establish `map -> base_link`.
+3. Wait for CUDA warm-up, acados, `/people`, the people detector and Jackal output to report ready.
+4. Before moving, place one real person in the camera view and confirm `/people` is non-empty and a people marker appears in RViz. A chair is not a valid substitute because YOLO is person-only.
+5. Start a separate external camera recording of the physical robot and person.
+6. Keep the course free of chairs and unrelated obstacles. Have the person walk slowly toward the Jackal.
+7. Press PS4 Options once. Confirm one goal is accepted and only one new bag directory is created.
+8. Observe whether the Jackal detects and avoids the person, then continues toward the fixed `6 m` goal. Stop immediately if behavior becomes unsafe.
+9. After the run, stop the stack cleanly. Keep only the complete MCAP, but do not delete evidence before its duration, topic counts and closure are verified.
+10. Check that people and people-marker messages are non-empty; extract YOLO, DDIM, projection and total-planning timing statistics.
+11. Replay the accepted bag offline with Cyclone DDS on domain `99` and `social_nav_trajectories_test_mode.rviz`. Produce a new RViz MP4 and visually verify the person circle, `1.6 s` motion arrow, candidate, selected, projected and past-robot trajectories.
+12. Deliver the MCAP directory, offline RViz playback MP4, external real-world video, style/goal settings, timing report and a concise behavior assessment to the teammate.

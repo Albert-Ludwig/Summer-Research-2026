@@ -1,7 +1,20 @@
+import re
+from pathlib import Path
+
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+
+
+def runtime_test_mode_default():
+    config_path = Path(__file__).resolve().parents[1] / 'config' / 'runtime_mode.yaml'
+    try:
+        text = config_path.read_text(encoding='utf-8')
+    except OSError:
+        return 'false'
+    match = re.search(r'^\s*test_mode\s*:\s*(true|false)\s*$', text, re.I | re.M)
+    return match.group(1).lower() if match else 'false'
 
 
 def generate_launch_description():
@@ -16,6 +29,15 @@ def generate_launch_description():
             default_value='/jackal1/platform/emergency_stop',
         ),
         DeclareLaunchArgument('enable_output', default_value='false'),
+        DeclareLaunchArgument(
+            'test_mode',
+            default_value=runtime_test_mode_default(),
+        ),
+        DeclareLaunchArgument('require_nav_trigger', default_value='true'),
+        DeclareLaunchArgument(
+            'nav_enabled_topic',
+            default_value='/social_nav_diffusion/nav_enabled',
+        ),
         DeclareLaunchArgument('max_linear_speed', default_value='1.0'),
         DeclareLaunchArgument(
             'max_angular_speed',
@@ -54,6 +76,11 @@ def generate_launch_description():
                     'emergency_stop_topic'
                 ),
                 'enable_output': LaunchConfiguration('enable_output'),
+                'test_mode': LaunchConfiguration('test_mode'),
+                'require_nav_trigger': LaunchConfiguration(
+                    'require_nav_trigger'
+                ),
+                'nav_enabled_topic': LaunchConfiguration('nav_enabled_topic'),
                 'max_linear_speed': LaunchConfiguration('max_linear_speed'),
                 'max_angular_speed': LaunchConfiguration('max_angular_speed'),
                 'input_timeout': LaunchConfiguration('input_timeout'),

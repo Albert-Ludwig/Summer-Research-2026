@@ -35,6 +35,12 @@ JACKAL_WORKSPACE = "/home/administrator/nahl_ws"
 JACKAL_SETUP = "/etc/clearpath/setup.bash"
 JACKAL_LOCALIZATION_PID = "/tmp/run_jackal_robohub_localization.pid"
 JACKAL_CAMERA_NODE = "/jackal1/sensors/camera_0/intel_realsense"
+JACKAL_COLOR_TOPIC = "/jackal1/sensors/camera_0/color/image"
+JACKAL_DEPTH_TOPIC = "/jackal1/sensors/camera_0/aligned_depth_to_color/image"
+JACKAL_CAMERA_INFO_TOPIC = (
+    "/jackal1/sensors/camera_0/aligned_depth_to_color/camera_info"
+)
+JACKAL_RGBD_PROFILE = "424,240,15"
 VNC_PORT = 6084
 VNC_URL = (
     f"http://127.0.0.1:{VNC_PORT}/vnc.html?autoconnect=1&resize=scale"
@@ -53,6 +59,21 @@ RVIZ_CONFIG = PurePosixPath(
 CHECKPOINT = PurePosixPath(
     "/workspace/SocialNavDiffusion_Inference/"
     "ckpt_step478000_SOCIAL_NORMS8.pt"
+)
+TEST_MODE_CHECKPOINT = PurePosixPath(
+    "/workspace/SocialNavDiffusion_Inference/"
+    "ckpt_step990000_sogudiff_singleaxis_1p5M.pt"
+)
+TEST_MODE_NORM = PurePosixPath(
+    "/workspace/SocialNavDiffusion_Inference/"
+    "norm_stats_sogudiff_allarms_1p5M.npy"
+)
+RUNTIME_MODE_CONFIG = (
+    Path(__file__).resolve().parents[1]
+    / "Humble_Migration_20260729"
+    / "pipeline_source"
+    / "config"
+    / "runtime_mode.yaml"
 )
 DEFAULT_MAP_FILE = PurePosixPath(
     "/home/administrator/nahl_ws/maps/final.yaml"
@@ -86,6 +107,16 @@ export PYTHONUNBUFFERED=1
 
 class LaunchError(RuntimeError):
     pass
+
+
+def configured_test_mode() -> bool:
+    """Read the single durable mode switch without requiring PyYAML."""
+    try:
+        text = RUNTIME_MODE_CONFIG.read_text(encoding="utf-8")
+    except OSError:
+        return False
+    match = re.search(r"^\s*test_mode\s*:\s*(true|false)\s*$", text, re.I | re.M)
+    return bool(match and match.group(1).lower() == "true")
 
 
 @dataclass
@@ -291,6 +322,10 @@ def preflight_jackal_localization(password: str, map_file: str) -> None:
 
 def enable_jackal_rgbd(password: str) -> None:
     node = shlex.quote(JACKAL_CAMERA_NODE)
+    color_topic = shlex.quote(JACKAL_COLOR_TOPIC)
+    depth_topic = shlex.quote(JACKAL_DEPTH_TOPIC)
+    camera_info_topic = shlex.quote(JACKAL_CAMERA_INFO_TOPIC)
+    profile = shlex.quote(JACKAL_RGBD_PROFILE)
     remote_command = (
         "set -e; "
         f"source {shlex.quote(JACKAL_SETUP)}; "
@@ -298,13 +333,33 @@ def enable_jackal_rgbd(password: str) -> None:
         "source install/setup.bash; "
         "export ROS_SUPER_CLIENT=True; "
         "for attempt in $(seq 1 12); do "
-        f"if ROS2CLI_NO_DAEMON=1 ros2 param set {node} enable_depth true "
+        f"ROS2CLI_NO_DAEMON=1 ros2 param set {node} "
+        "align_depth.enable false >/dev/null 2>&1 || true; "
+        f"ROS2CLI_NO_DAEMON=1 ros2 param set {node} "
+        "enable_sync false >/dev/null 2>&1 || true; "
+        f"ROS2CLI_NO_DAEMON=1 ros2 param set {node} "
+        "enable_depth false >/dev/null 2>&1 || true; "
+        f"ROS2CLI_NO_DAEMON=1 ros2 param set {node} "
+        "enable_color false >/dev/null 2>&1 || true; "
+        "sleep 1; "
+        f"if ROS2CLI_NO_DAEMON=1 ros2 param set {node} "
+        f"depth_module.depth_profile {profile} "
+        f"&& ROS2CLI_NO_DAEMON=1 ros2 param set {node} "
+        f"rgb_camera.color_profile {profile} "
+        f"&& ROS2CLI_NO_DAEMON=1 ros2 param set {node} enable_depth true "
+        f"&& ROS2CLI_NO_DAEMON=1 ros2 param set {node} enable_color true "
         "&& sleep 1 "
         f"&& ROS2CLI_NO_DAEMON=1 ros2 param set {node} enable_sync true "
         f"&& ROS2CLI_NO_DAEMON=1 ros2 param set {node} "
-        "align_depth.enable true; then exit 0; fi; "
+        "align_depth.enable true "
+        f"&& ROS2CLI_NO_DAEMON=1 timeout 6s ros2 topic echo {color_topic} "
+        "sensor_msgs/msg/Image --once >/dev/null "
+        f"&& ROS2CLI_NO_DAEMON=1 timeout 6s ros2 topic echo {depth_topic} "
+        "sensor_msgs/msg/Image --once >/dev/null "
+        f"&& ROS2CLI_NO_DAEMON=1 timeout 6s ros2 topic echo {camera_info_topic} "
+        "sensor_msgs/msg/CameraInfo --once >/dev/null; then exit 0; fi; "
         "sleep 1; done; "
-        f"echo 'Timed out waiting for {node}' >&2; exit 1"
+        f"echo 'Timed out waiting for live RGB-D topics from {node}' >&2; exit 1"
     )
     run_jackal_checked(
         password,
@@ -415,9 +470,9 @@ def stop_jackal_localization(
 def prepare_container_desktop() -> None:
     command = (
         "set -e; "
-        "for attempt in $(seq 1 60); do "
-        "test -S /var/run/supervisor.sock && break; sleep 1; done; "
-        "test -S /var/run/supervisor.sock; "
+        "for attempt in $(seq 1 180); do "
+        "supervisorctl status >/dev/null 2>&1 && break; sleep 1; done; "
+        "supervisorctl status >/dev/null 2>&1; "
         "sed -i 's/127\\.0\\.0\\.1:6084/0.0.0.0:6084/' "
         "/etc/supervisor/conf.d/supervisord.conf; "
         "supervisorctl reread >/dev/null; "
@@ -464,7 +519,16 @@ def container_arguments(args: argparse.Namespace) -> list[str]:
         str(args.localization_timeout),
         "--map-topic",
         args.map_topic,
+        "--goal-distance-m",
+        str(args.goal_distance_m),
+        "--trigger-button-index",
+        str(args.trigger_button_index),
+        "--style-vector",
+        *(str(value) for value in args.style_vector),
     ]
+    result.append("--test-mode" if args.test_mode else "--no-test-mode")
+    if not args.record_bag:
+        result.append("--no-record-bag")
     if args.no_rviz:
         result.append("--no-rviz")
     return result
@@ -646,8 +710,10 @@ class RealJackalLauncher:
             VENV / "bin/python",
             ACADOS / "lib/libacados.so",
             DDS_PROFILE,
-            CHECKPOINT,
+            TEST_MODE_CHECKPOINT if self.args.test_mode else CHECKPOINT,
         ]
+        if self.args.test_mode:
+            required.append(TEST_MODE_NORM)
         missing = [str(path) for path in required if not Path(path).exists()]
         if missing:
             raise LaunchError("Missing required paths:\n  " + "\n  ".join(missing))
@@ -919,6 +985,11 @@ class RealJackalLauncher:
 
     def commands(self) -> tuple[str, str, str, str]:
         map_topic = shlex.quote(self.args.map_topic)
+        test_mode = "true" if self.args.test_mode else "false"
+        record_bag = "true" if self.args.record_bag else "false"
+        style_vector = shlex.quote(
+            "[" + ", ".join(str(value) for value in self.args.style_vector) + "]"
+        )
         policy = f"""
 {ROS_ENV}
 cd {PIPELINE}
@@ -928,6 +999,12 @@ exec ros2 launch social_nav_diffusion_ros \
   start_policy:=true \
   start_goal_bridge:=true \
   map_topic:={map_topic} \
+  test_mode:={test_mode} \
+  start_ps4_trigger:={test_mode} \
+  style_vector:={style_vector} \
+  goal_distance_m:={self.args.goal_distance_m} \
+  trigger_button_index:={self.args.trigger_button_index} \
+  record_bag:={record_bag} \
   start_rviz:=false
 """.strip()
         people = f"""
@@ -938,6 +1015,8 @@ exec ros2 launch social_nav_diffusion_ros \
   start_people_detector:=true \
   start_policy:=false \
   start_goal_bridge:=false \
+  test_mode:={test_mode} \
+  start_ps4_trigger:=false \
   start_rviz:=false
 """.strip()
         adapter = f"""
@@ -948,14 +1027,17 @@ exec ros2 launch social_nav_diffusion_ros \
   enable_lidar_safety:=true \
   lidar_topic:=/jackal1/sensors/lidar3d_0/scan \
   max_linear_speed:={self.args.max_linear_speed} \
-  max_angular_speed:={self.args.max_angular_speed}
+  max_angular_speed:={self.args.max_angular_speed} \
+  test_mode:={test_mode} \
+  require_nav_trigger:={test_mode}
 """.strip()
+        rviz_config = RVIZ_CONFIG
         rviz = f"""
 {ROS_ENV}
 export DISPLAY=:1
 export XAUTHORITY=/home/ubuntu/.Xauthority
 export XAUTHLOCALHOSTNAME=AlbertLudwig
-exec rviz2 -d {RVIZ_CONFIG} --ros-args \
+exec rviz2 -d {rviz_config} --ros-args \
   -r __ns:=/jackal1 \
   -r /tf:=/jackal1/tf \
   -r /tf_static:=/jackal1/tf_static
@@ -1128,6 +1210,36 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
     parser.add_argument("--localization-timeout", type=float, default=600.0)
     parser.add_argument("--map-file", default=str(DEFAULT_MAP_FILE))
     parser.add_argument("--map-topic", default=DEFAULT_MAP_TOPIC)
+    mode_group = parser.add_mutually_exclusive_group()
+    mode_group.add_argument(
+        "--test-mode",
+        dest="test_mode",
+        action="store_true",
+        help="enable the teammate JackalUpdate08-18 experiment path",
+    )
+    mode_group.add_argument(
+        "--no-test-mode",
+        dest="test_mode",
+        action="store_false",
+        help="force the stable4 path even when runtime_mode.yaml enables tests",
+    )
+    parser.set_defaults(test_mode=configured_test_mode())
+    parser.add_argument(
+        "--style-vector",
+        nargs=4,
+        type=float,
+        metavar=("PROX", "PASS", "YIELD", "GROUP"),
+        default=[0.0, 0.0, 0.0, 0.0],
+    )
+    parser.add_argument("--goal-distance-m", type=float, default=6.0)
+    parser.add_argument("--trigger-button-index", type=int, default=7)
+    parser.add_argument(
+        "--no-record-bag",
+        dest="record_bag",
+        action="store_false",
+        help="disable per-run MCAP recording in test mode",
+    )
+    parser.set_defaults(record_bag=True)
     args = parser.parse_args(argv)
     if args.max_linear_speed <= 0 or args.max_angular_speed <= 0:
         parser.error("speed limits must be positive")
@@ -1143,6 +1255,12 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         parser.error("--map-file must be an absolute path on the Jackal")
     if not args.map_topic.startswith("/"):
         parser.error("--map-topic must be an absolute ROS topic")
+    if args.goal_distance_m <= 0:
+        parser.error("--goal-distance-m must be positive")
+    if args.trigger_button_index < 0:
+        parser.error("--trigger-button-index must be non-negative")
+    if any(value < -1.0 or value > 1.0 for value in args.style_vector):
+        parser.error("--style-vector values must be within [-1, 1]")
     return args
 
 

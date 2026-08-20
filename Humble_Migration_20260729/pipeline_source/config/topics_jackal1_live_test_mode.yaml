@@ -1,0 +1,44 @@
+policy_cmd_vel_node:
+  ros__parameters:
+    people_topic: /people
+    ignore_people_for_policy: false
+    require_people_stream: true
+    odom_topic: /jackal1/platform/odom/filtered
+    map_topic: /map
+    enable_live_lidar_to_policy: true
+    require_live_lidar_for_policy: true
+    lidar_topic: /jackal1/sensors/lidar3d_0/scan
+    lidar_timeout_sec: 0.5
+    lidar_min_range_m: 0.15
+    lidar_max_range_m: 6.0
+    lidar_voxel_size_m: 0.25
+    lidar_max_points: 64
+    lidar_obstacle_memory_sec: 0.8
+    goal_topic: /goal_pose
+    robot_goal_topic: /jackal1/goal_pose
+    cmd_vel_topic: /debug_cmd_vel
+    active_goal_marker_topic: /social_nav_diffusion/active_goal_marker
+    projected_trajectory_topic: /social_nav_diffusion/projected_trajectory
+    predicted_trajectory_topic: /social_nav_diffusion/predicted_trajectory
+    policy_debug_topic: /social_nav_diffusion/policy_debug
+    style_vector_topic: /social_nav_diffusion/style_vector
+    cmd_frame_id: base_link
+    target_policy_frame: map
+    people_frame: map
+
+nav2_goal_to_pose_bridge:
+  ros__parameters:
+    robot_odom_topic: /jackal1/platform/odom/filtered
+    goal_topic: /goal_pose
+    robot_goal_topic: /jackal1/goal_pose
+    active_goal_marker_topic: /social_nav_diffusion/active_goal_marker
+    navigate_to_pose_action: /navigate_to_pose
+    robot_navigate_to_pose_action: /jackal1/navigate_to_pose
+
+ps4_nav_trigger_node:
+  ros__parameters:
+    joy_topic: /jackal1/joy_teleop/joy
+    navigate_to_pose_action: /navigate_to_pose
+    robot_navigate_to_pose_action: /jackal1/navigate_to_pose
+    nav_enabled_topic: /social_nav_diffusion/nav_enabled
+    style_vector_topic: /social_nav_diffusion/style_vector

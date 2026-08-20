@@ -1,3 +1,4 @@
+import collections
 import json
 import math
 import os
@@ -42,6 +43,7 @@ import numpy as np
 import rclpy
 import torch
 from cv_bridge import CvBridge
+from geometry_msgs.msg import Point
 from people_msgs.msg import People, Person
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 from rclpy.duration import Duration
@@ -260,6 +262,7 @@ class RgbdPeopleDetector(Node):
     def __init__(self):
         super().__init__('rgbd_people_detector')
 
+        self.declare_parameter('test_mode', False)
         self.declare_parameter(
             'color_topic',
             '/jackal1/sensors/camera_0/color/image',
@@ -308,7 +311,11 @@ class RgbdPeopleDetector(Node):
         self.declare_parameter('lidar_position_smoothing', 0.25)
         self.declare_parameter('lidar_velocity_smoothing', 0.25)
         self.declare_parameter('lidar_max_prediction_sec', 0.50)
+        self.declare_parameter('people_horizon_sec', 1.6)
+        self.declare_parameter('people_min_speed_for_arrow_mps', 0.05)
+        self.declare_parameter('people_circle_radius_m', 0.25)
 
+        self.test_mode = bool(self.get_parameter('test_mode').value)
         self.color_topic = str(self.get_parameter('color_topic').value)
         self.depth_topic = str(self.get_parameter('depth_topic').value)
         self.camera_info_topic = str(
@@ -343,6 +350,8 @@ class RgbdPeopleDetector(Node):
         self.latest_info_receive: Optional[float] = None
         self.last_processed_color_stamp: Optional[Tuple[int, int]] = None
         self.last_successful_inference_receive: Optional[float] = None
+        self.yolo_ms_window: 'collections.deque' = collections.deque(maxlen=50)
+        self.last_yolo_ms = float('nan')
         self.last_inference_fields = {
             'ready': False,
             'reason': 'waiting_for_first_inference',
@@ -655,7 +664,13 @@ class RgbdPeopleDetector(Node):
         camera_info: CameraInfo,
         transform,
     ) -> Tuple[List[Detection], int]:
-        candidates = self.person_box_candidates(color_image)
+        if self.test_mode:
+            yolo_start = time.perf_counter()
+            candidates = self.person_box_candidates(color_image)
+            self.last_yolo_ms = (time.perf_counter() - yolo_start) * 1000.0
+            self.yolo_ms_window.append(self.last_yolo_ms)
+        else:
+            candidates = self.person_box_candidates(color_image)
         max_people = int(self.get_parameter('max_people').value)
         depth_failures = 0
         detections: List[Detection] = []
@@ -774,30 +789,88 @@ class RgbdPeopleDetector(Node):
             people.people.append(person)
         self.people_pub.publish(people)
 
+        circle_radius = float(self.get_parameter('people_circle_radius_m').value)
+        horizon_sec = float(self.get_parameter('people_horizon_sec').value)
+        min_arrow_speed = float(self.get_parameter('people_min_speed_for_arrow_mps').value)
+
         markers = MarkerArray()
         delete_all = Marker()
         delete_all.action = Marker.DELETEALL
         markers.markers.append(delete_all)
         for track in tracks:
-            marker = Marker()
-            marker.header = people.header
-            marker.ns = 'rgbd_people'
-            marker.id = track.track_id
-            marker.type = Marker.CYLINDER
-            marker.action = Marker.ADD
-            marker.pose.position.x = track.x
-            marker.pose.position.y = track.y
-            marker.pose.position.z = max(0.9, track.z)
-            marker.pose.orientation.w = 1.0
-            marker.scale.x = 0.5
-            marker.scale.y = 0.5
-            marker.scale.z = 1.8
-            marker.color.r = 0.1
-            marker.color.g = 0.9
-            marker.color.b = 0.2
-            marker.color.a = 0.75
-            marker.lifetime = Duration(seconds=0.5).to_msg()
-            markers.markers.append(marker)
+            if not self.test_mode:
+                marker = Marker()
+                marker.header = people.header
+                marker.ns = 'rgbd_people'
+                marker.id = track.track_id
+                marker.type = Marker.CYLINDER
+                marker.action = Marker.ADD
+                marker.pose.position.x = track.x
+                marker.pose.position.y = track.y
+                marker.pose.position.z = max(0.9, track.z)
+                marker.pose.orientation.w = 1.0
+                marker.scale.x = 0.5
+                marker.scale.y = 0.5
+                marker.scale.z = 1.8
+                marker.color.r = 0.1
+                marker.color.g = 0.9
+                marker.color.b = 0.2
+                marker.color.a = 0.75
+                marker.lifetime = Duration(seconds=0.5).to_msg()
+                markers.markers.append(marker)
+                continue
+
+            # Standing-body cylinder, footprint diameter == 2 * policy human
+            # radius (env.config human.radius); kept tall for visibility in
+            # typical RViz camera angles and video, at the cost of not
+            # literally reading as a flat "circle."
+            circle = Marker()
+            circle.header = people.header
+            circle.ns = 'rgbd_people_circle'
+            circle.id = track.track_id
+            circle.type = Marker.CYLINDER
+            circle.action = Marker.ADD
+            circle.pose.position.x = track.x
+            circle.pose.position.y = track.y
+            circle.pose.position.z = max(0.9, track.z)
+            circle.pose.orientation.w = 1.0
+            circle.scale.x = 2.0 * circle_radius
+            circle.scale.y = 2.0 * circle_radius
+            circle.scale.z = 1.8
+            circle.color.r = 0.1
+            circle.color.g = 0.9
+            circle.color.b = 0.2
+            circle.color.a = 0.75
+            circle.lifetime = Duration(seconds=0.5).to_msg()
+            markers.markers.append(circle)
+
+            # Constant-velocity horizon arrow: where this track will be in
+            # `horizon_sec` if it keeps its current smoothed velocity.
+            speed = math.hypot(track.vx, track.vy)
+            if speed >= min_arrow_speed:
+                arrow = Marker()
+                arrow.header = people.header
+                arrow.ns = 'rgbd_people_horizon'
+                arrow.id = track.track_id
+                arrow.type = Marker.ARROW
+                arrow.action = Marker.ADD
+                arrow.pose.orientation.w = 1.0
+                start_point = Point(x=track.x, y=track.y, z=0.1)
+                end_point = Point(
+                    x=track.x + track.vx * horizon_sec,
+                    y=track.y + track.vy * horizon_sec,
+                    z=0.1,
+                )
+                arrow.points = [start_point, end_point]
+                arrow.scale.x = 0.06  # shaft diameter
+                arrow.scale.y = 0.12  # head diameter
+                arrow.scale.z = 0.15  # head length
+                arrow.color.r = 1.0
+                arrow.color.g = 0.6
+                arrow.color.b = 0.0
+                arrow.color.a = 0.9
+                arrow.lifetime = Duration(seconds=0.5).to_msg()
+                markers.markers.append(arrow)
         self.marker_pub.publish(markers)
 
     def people_publish_callback(self):
@@ -819,8 +892,6 @@ class RgbdPeopleDetector(Node):
                 self.tracks.values(),
                 key=lambda track: track.track_id,
             )
-
-        self.publish_people(tracks, self.get_clock().now().to_msg())
 
         source_timeout = float(
             self.get_parameter('source_timeout_sec').value
@@ -875,6 +946,8 @@ class RgbdPeopleDetector(Node):
             'lidar_tracks_updated': self.last_lidar_track_updates,
             'lidar_error': self.last_lidar_error,
         })
+        if fields['ready']:
+            self.publish_people(tracks, self.get_clock().now().to_msg())
         self.publish_status(**fields)
 
     def inference_callback(self):
@@ -935,7 +1008,7 @@ class RgbdPeopleDetector(Node):
                 )
             self.last_successful_inference_receive = receive_sec
             elapsed_ms = (time.perf_counter() - start) * 1000.0
-            self.remember_inference_status(
+            status_fields = dict(
                 ready=True,
                 device=str(self.device),
                 detections=len(detections),
@@ -944,6 +1017,13 @@ class RgbdPeopleDetector(Node):
                 inference_ms=round(elapsed_ms, 2),
                 sync_delta_sec=round(sync_delta, 4),
             )
+            if self.test_mode:
+                status_fields['test_mode'] = True
+                status_fields['yolo_ms'] = round(self.last_yolo_ms, 2)
+                status_fields['yolo_ms_avg'] = round(
+                    sum(self.yolo_ms_window) / len(self.yolo_ms_window), 2
+                ) if self.yolo_ms_window else float('nan')
+            self.remember_inference_status(**status_fields)
         except (TransformException, RuntimeError, ValueError) as exc:
             self.remember_inference_status(
                 ready=False,

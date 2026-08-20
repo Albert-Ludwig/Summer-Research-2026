@@ -159,6 +159,7 @@ class JackalTwistAdapter(Node):
     def __init__(self):
         super().__init__('jackal_twist_adapter')
 
+        self.declare_parameter('test_mode', False)
         self.declare_parameter('input_topic', '/debug_cmd_vel')
         self.declare_parameter('output_topic', '/jackal1/cmd_vel')
         self.declare_parameter(
@@ -168,6 +169,11 @@ class JackalTwistAdapter(Node):
         self.declare_parameter('enable_output', False)
         self.declare_parameter('require_emergency_stop_clear', True)
         self.declare_parameter('continuous_zero_output', False)
+        self.declare_parameter('require_nav_trigger', False)
+        self.declare_parameter(
+            'nav_enabled_topic',
+            '/social_nav_diffusion/nav_enabled',
+        )
         self.declare_parameter('max_linear_speed', 1.0)
         self.declare_parameter(
             'max_angular_speed',
@@ -206,6 +212,16 @@ class JackalTwistAdapter(Node):
         self.continuous_zero_output = bool(
             self.get_parameter('continuous_zero_output').value
         )
+        self.test_mode = bool(self.get_parameter('test_mode').value)
+        self.require_nav_trigger = self.test_mode and bool(
+            self.get_parameter('require_nav_trigger').value
+        )
+        self.nav_enabled_topic = str(
+            self.get_parameter('nav_enabled_topic').value
+        )
+        # Fail-safe default: blocked until the trigger node publishes True,
+        # mirroring require_emergency_stop_clear's default-blocking behavior.
+        self.nav_trigger_enabled = not self.require_nav_trigger
         self.max_linear_speed = abs(
             float(self.get_parameter('max_linear_speed').value)
         )
@@ -313,6 +329,17 @@ class JackalTwistAdapter(Node):
                 self.emergency_stop_callback,
                 10,
             )
+        if self.require_nav_trigger:
+            self.create_subscription(
+                Bool,
+                self.nav_enabled_topic,
+                self.nav_trigger_callback,
+                10,
+            )
+            self.get_logger().warn(
+                'Nav trigger gate ENABLED: blocking output until '
+                f'{self.nav_enabled_topic} publishes True.'
+            )
         if self.lidar_safety_enabled:
             self.create_subscription(
                 LaserScan,
@@ -345,6 +372,14 @@ class JackalTwistAdapter(Node):
             self.publish_zero_once('emergency stop active')
         elif was_active:
             self.get_logger().warn('Emergency stop is clear; commands may pass.')
+
+    def nav_trigger_callback(self, msg: Bool):
+        was_enabled = self.nav_trigger_enabled
+        self.nav_trigger_enabled = bool(msg.data)
+        if not self.nav_trigger_enabled:
+            self.publish_zero_once('nav trigger stopped/not started')
+        elif not was_enabled:
+            self.get_logger().warn('Nav trigger enabled; commands may pass.')
 
     def lidar_callback(self, msg: LaserScan):
         self.latest_lidar_points = laser_scan_points_base(
@@ -396,6 +431,9 @@ class JackalTwistAdapter(Node):
         self.last_input_time = self.now_sec()
         if self.emergency_stop_active:
             self.publish_zero_once('waiting for clear emergency-stop state')
+            return
+        if self.require_nav_trigger and not self.nav_trigger_enabled:
+            self.publish_zero_once('waiting for nav trigger start')
             return
 
         output = Twist()
