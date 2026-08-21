@@ -804,3 +804,318 @@ credentials, API keys, passwords, or private keys
 The launchers start existing containers; they do not recreate them. Recovery is
 complete only when model hashes, GPU access, ROS executables, acados projection,
 and offline inference all pass.
+
+## Runtime Architecture And Control Reference
+
+This section describes the current ROS 2 Humble real-Jackal implementation. It
+documents the code that is active during a test, the important parameters, and
+the complete path from sensors and goals to wheel commands.
+
+### Real-Robot Reference
+
+The retained MCAP run is:
+
+[`bags/run_20260820_205934_550984_prox0.00_pass0.00_yield0.00_group0.00`](bags/run_20260820_205934_550984_prox0.00_pass0.00_yield0.00_group0.00)
+
+The corresponding RViz playback video is:
+
+[`social_nav_rviz_playback_run_20260820_205934.mp4`](bags/recordings/social_nav_rviz_playback_run_20260820_205934.mp4)
+
+The video is a real-run rosbag playback reference. It verifies that the bag can
+be replayed and that the goal, candidate trajectories, selected trajectory,
+projected trajectory, and robot motion trail can be visualized. It is not the
+final human-avoidance acceptance evidence by itself. Confirm that `/people`
+contains valid detections and pair the playback with synchronized external
+camera footage before using a run as the final experiment record.
+
+### Runtime Modes
+
+The durable switch is
+`Humble_Migration_20260729/pipeline_source/config/runtime_mode.yaml`.
+
+```yaml
+runtime:
+  test_mode: false
+```
+
+`false` selects the preserved stable mode. `true` selects the teammate
+JackalUpdate08-18 experiment mode. Command-line arguments override the file:
+
+```powershell
+# Preserved stable mode
+python "C:\Users\Administrator\Documents\Summer Research 2026\Documentations\run_jackal_robohub.py" --no-test-mode
+
+# Teammate test mode
+python "C:\Users\Administrator\Documents\Summer Research 2026\Documentations\run_jackal_teammate_test.py"
+```
+
+`run_jackal_teammate_test.py` always forwards `--test-mode`. It does not alter
+the durable YAML switch. Test mode enables the PS4 fixed-goal trigger, style
+vector, candidate-trajectory visualization, navigation-output gate, test
+checkpoint, and per-run MCAP recording.
+
+### Runtime File Map
+
+| File | Purpose |
+|---|---|
+| `Documentations/run_jackal_robohub.py` | Canonical one-command launcher. Starts onboard localization over SSH, WSL, the `jackal_robohub` container, detector, policy, command adapter, RViz, and orderly shutdown. |
+| `Documentations/run_jackal_teammate_test.py` | Small wrapper that forces teammate test mode while reusing the canonical launcher. |
+| `Documentations/humble_launch.md` | Short launch-command and path reference. |
+| `Documentations/Record.md` | Chronological test and troubleshooting record. It is not executable configuration. |
+| `config_files/ros_ethernet.env` | ROS 2 and wired Fast DDS environment for communication with the Jackal. |
+| `config_files/fastdds_robot_wired.xml` | Fast DDS discovery and interface profile used by the offboard ROS processes. |
+| `config_files/jackal_robohub_navigation.rviz` | Stable live RViz layout loaded by the canonical launcher. |
+| `config_files/social_nav_bag_playback.rviz` | Lightweight offline playback layout. |
+| `config_files/check_jackal_readonly.sh` | Read-only preflight for robot topics and connectivity. It does not publish velocity. |
+| `launch/jackal_realtime_social_nav_debug.launch.py` | Starts selected combinations of the detector, policy wrapper, goal bridge, PS4 trigger, and optional RViz. |
+| `launch/jackal_twist_adapter.launch.py` | Starts the final real-robot command adapter and exposes speed and LiDAR-safety arguments. |
+| `social_nav_diffusion_ros/rgbd_people_detector.py` | Runs YOLO on RGB images, uses aligned depth for 3D position, tracks people, optionally associates LiDAR returns, and publishes `/people`. |
+| `social_nav_diffusion_ros/ps4_nav_trigger_node.py` | Watches PS4 Options, creates a fixed goal ahead of the robot, toggles autonomous output, publishes the style vector state, and owns one MCAP recorder per accepted run. |
+| `social_nav_diffusion_ros/nav2_goal_to_pose_bridge.py` | Implements the `NavigateToPose` action expected by the PS4 trigger and republishes the accepted goal for the policy. It does not replace localization. |
+| `social_nav_diffusion_ros/policy_cmd_vel_node.py` | Main integration and control wrapper. Builds model state, calls SocialNavDiffusion, converts actions, executes projected controls between inference results, applies limits, and publishes `/debug_cmd_vel`. |
+| `social_nav_diffusion_ros/jackal_twist_adapter.py` | Final hardware boundary. Converts `TwistStamped` to `Twist`, enforces the PS4 gate, e-stop, command watchdog, speed bounds, and swept-footprint LiDAR veto before `/jackal1/cmd_vel`. |
+| `social_nav_diffusion_ros/social_nav_diffusion_node.py` | Older standalone debug inference node. It is installed but is not used by the real-Jackal launcher. |
+| `social_nav_diffusion_ros/social_nav_diffusion_node_test_mode.py` | Test-mode form of the older standalone debug node. It is not the active real-Jackal controller. |
+| `config/runtime_mode.yaml` | Durable stable/test mode selection. |
+| `config/test_speed_control.yaml` | Active policy-wrapper control limits, warm-up behavior, goal handling, map handling, and projected-trajectory execution settings. |
+| `config/topics_jackal1_live.yaml` | Real Jackal topic names for odometry, map, LiDAR, people, goal, debug command, and visualization outputs. |
+| `config/topics_jackal1_live_test_mode.yaml` | PS4, action, navigation gate, and style-vector topics used only by test mode. |
+| `config/rgbd_people_jackal1.yaml` | YOLO, depth, tracking, and LiDAR-association parameters. |
+| `config/social_nav_trajectories_test_mode.rviz` | Full trajectory layout used for teammate-mode offline playback. |
+| `scripts/run_single_step.py` | Non-ROS stable-policy inference and acados smoke test. |
+| `scripts/run_single_step_test_mode.py` | Non-ROS teammate-policy test. Supports repeated calls and warm-up-excluded timing. |
+| `SocialNavDiffusion_Inference/crowd_nav/configs/policy.config` | Preserved stable model configuration. |
+| `SocialNavDiffusion_Inference/crowd_nav/configs/policy_test_mode.config` | Teammate model architecture, DDIM, scoring, projection, map, style, and action-limit configuration. |
+| `SocialNavDiffusion_Inference/crowd_nav/policy/diffusion_CondUNetCFG.py` | Preserved stable SocialNavDiffusion policy. |
+| `SocialNavDiffusion_Inference/crowd_nav/policy/diffusion_CondUNetCFG_test_mode.py` | Teammate test policy with style conditioning, trajectory sampling, scoring, acados projection, and optional detailed timing. |
+| `SocialNavDiffusion_Inference/crowd_nav/policy/projection_solver.py` | acados projection-solver construction and generated-solver interface. |
+| `SocialNavDiffusion_Inference/crowd_nav/policy/projection_unicycle_model.py` | Unicycle dynamics and constraints used by the projection layer. |
+
+Paths beginning with `launch/`, `config/`, `scripts/`, or
+`social_nav_diffusion_ros/` in this table are relative to
+`Humble_Migration_20260729/pipeline_source/`.
+
+### Active Test Parameters
+
+#### Goal, Style, And Trigger
+
+| Parameter | Current value | Meaning |
+|---|---:|---|
+| `test_mode` | `true` for teammate runs | Selects the teammate policy, checkpoint, trigger, visualizations, and recording path. |
+| `goal_distance_m` | `6.0 m` | Goal is computed once, six metres ahead of the current base heading. |
+| `trigger_button_index` | `7` | PS4 Options on the verified `/jackal1/joy_teleop/joy` mapping. |
+| `style_vector` | `[0, 0, 0, 0]` | Ordered as `[prox, pass, yield, group]`; every value must stay in `[-1, 1]`. |
+| `record_bag` | `true` | Starts one timestamped MCAP after the action goal is accepted. |
+| `bag_output_dir` | `/workspace/bags` | Host-visible output directory for experiment bags. |
+| onboard map | `/home/administrator/nahl_ws/maps/final.yaml` | Saved map used by onboard localization. |
+| map topic | `/jackal1/map` | Map received by the offboard pipeline and remapped to the policy's `/map`. |
+
+#### Diffusion And Projection
+
+| Parameter | Current value |
+|---|---:|
+| test checkpoint | `ckpt_step990000_sogudiff_singleaxis_1p5M.pt` |
+| normalization | `norm_stats_sogudiff_allarms_1p5M.npy` |
+| kinematics | `unicycle` |
+| trajectory horizon | `32` states |
+| maximum dynamic agents | `10` |
+| DDIM inference steps | `20` |
+| sampled trajectories | `5` |
+| CFG inference mode | `per_axis` |
+| style CFG weight | `5.0` |
+| scene CFG weight | `1.0` |
+| model safety radius | `0.5 m` |
+| collision cost | `10` |
+| smoothness cost | `1` |
+| goal reward | `5` |
+| control-effort cost | `0.5` |
+| projection | enabled |
+| solver | acados SQP, at most `5` iterations, tolerance `1e-3` |
+| static projection points | `20` |
+| map conditioning | enabled, `50 x 50` over `10 m` extent |
+| mixed precision | CUDA `bfloat16` AMP |
+
+The stable and test checkpoints are both retained. The wrapper overrides the
+config's checkpoint and normalization paths with the mode-specific files after
+checking their existence and hashes.
+
+#### Wrapper And Command Execution
+
+| Parameter | Current value | Meaning |
+|---|---:|---|
+| `max_linear_speed` | `1.0 m/s` | Wrapper and adapter linear-speed bound. |
+| `max_angular_speed` | `3.14 rad/s` | Wrapper and adapter yaw-rate bound. |
+| `max_linear_accel` | `1.5 m/s^2` | Linear slew-rate limit. |
+| `max_angular_accel` | `3.14 rad/s^2` | Angular slew-rate limit. |
+| `goal_tolerance` | `0.25 m` | Stops and resets the policy at the goal. |
+| `goal_timeout_sec` | `150 s` | Maximum active-goal duration. |
+| `robot_v_pref` | `1.0 m/s` | Preferred model speed. |
+| `robot_radius` | `0.25 m` | Circular robot radius presented to the model. |
+| `human_radius` | `0.25 m` | Circular human radius presented to the model. |
+| command publish period | `0.10 s` | Publishes or samples the latest projected command at `10 Hz`. |
+| inference request period | `0.10 s` | Requests planning at up to `10 Hz`; actual rate is limited by inference time. |
+| command hold timeout | `1.0 s` | Rejects an excessively old policy result. |
+| projected trajectory sampling | enabled | Executes successive projected controls between diffusion results. |
+| latency compensation | disabled | New trajectories are aligned to current odometry instead of blindly skipping by inference duration. |
+| warm-up | enabled, no command output | Compiles the CUDA path before autonomous output can be enabled. |
+| odometry synchronization | enabled | Synchronizes policy warm start and previous action from measured robot motion. |
+| static map updates | change-only | Avoids rebuilding unchanged map conditioning every policy call. |
+
+Near-goal slowdown, heading gate, heading stop, heading-alignment override, and
+sign-conflict override are disabled by default. Normal navigation therefore
+comes from the diffusion policy and acados projection. The wrapper retains only
+goal stopping, physical speed/acceleration bounds, result freshness, and
+trajectory execution. The old placeholder `compute_policy_action()` is not used
+when `use_diffusion_policy: true`.
+
+#### Perception And Tracking
+
+| Parameter | Current value |
+|---|---:|
+| detector | Ultralytics YOLO with `yolo11n.pt` |
+| YOLO input size | `480` |
+| confidence threshold | `0.45` |
+| YOLO period | `0.33 s` (about `3 Hz`) |
+| `/people` publish period | `0.20 s` (`5 Hz`) |
+| maximum tracked people | `10` |
+| valid depth range | `0.30-12.0 m` |
+| association distance | `1.0 m` |
+| camera track timeout | `0.75 s` |
+| LiDAR fusion | enabled at `0.10 s` |
+| LiDAR association radius | `0.55 m` |
+| LiDAR track hold | `1.50 s` |
+| velocity smoothing | `0.50` camera, `0.25` LiDAR |
+
+YOLO decides whether an observation is a person. Aligned depth converts the 2D
+detection into a 3D position. Tracking estimates velocity. LiDAR association
+can update or briefly hold an already identified person, but arbitrary LiDAR
+clusters are not promoted to people. Static obstacles are provided separately
+through map conditioning and live LiDAR points.
+
+The policy-side live LiDAR stream uses a `0.5 s` timeout, ranges from `0.15` to
+`6.0 m`, a `0.25 m` voxel size, at most `64` points, and `0.8 s` obstacle memory.
+
+#### Final Hardware Safety Boundary
+
+| Parameter | Current value |
+|---|---:|
+| adapter input | `/debug_cmd_vel` (`TwistStamped`) |
+| adapter output | `/jackal1/cmd_vel` (`Twist`) |
+| e-stop | `/jackal1/platform/emergency_stop` must be clear |
+| test-mode gate | `/social_nav_diffusion/nav_enabled` must be `true` |
+| command watchdog | `0.5 s` |
+| LiDAR watchdog | `0.4 s` |
+| LiDAR range | `0.15-6.0 m` |
+| LiDAR x offset | `0.12 m` |
+| physical footprint | `0.51 x 0.43 m` |
+| footprint margin | `0.05 m` |
+| collision reaction time | `0.15 s` |
+| assumed braking | `1.5 m/s^2`, `3.14 rad/s^2` |
+| collision simulation step | `0.05 s` |
+| maximum collision horizon | `1.5 s` |
+
+The adapter uses transparent-or-full-veto behavior. A safe command preserves
+both model values, `v` and `w`. A predicted swept-footprint collision, stale
+LiDAR, stale command, active e-stop, or disabled PS4 gate sends `v=0, w=0`.
+The adapter never keeps forward speed while deleting only the planned turn.
+
+### Control-Layer Implementation
+
+The control wrapper intentionally keeps model policy and hardware protection
+separate:
+
+1. `policy_cmd_vel_node` transforms odometry, goal, people, map, and LiDAR data
+   into the state format expected by `DiffusionConditionalUNet1DCFG`.
+2. The model samples five candidate trajectories with 20 DDIM steps.
+3. Candidate scoring selects one path using goal, collision, smoothness, and
+   control-effort terms.
+4. acados projects the selected path onto unicycle dynamics and obstacle
+   constraints.
+5. The returned `ActionRot(v, r)` is converted with `w = r / policy_dt`.
+6. The wrapper clamps `v` and `w` to the configured speed bounds and applies
+   linear and angular slew limits.
+7. While the next diffusion result is being computed, the wrapper samples the
+   projected control trajectory at `10 Hz`. New projected trajectories are
+   aligned against current odometry.
+8. The wrapper publishes the resulting `TwistStamped` on `/debug_cmd_vel`.
+9. `jackal_twist_adapter` performs the final independent hardware checks and
+   publishes a `Twist` on `/jackal1/cmd_vel` only when every gate is valid.
+
+This means the diffusion model decides the normal navigation behavior and
+human-avoidance intent. acados enforces dynamic feasibility. The wrapper
+executes the projected result and enforces physical command limits. The final
+adapter is a minimal collision and stale-data veto, not an alternative planner.
+
+### End-To-End Control Chain
+
+```text
+Saved map + onboard AMCL localization
+    -> /jackal1/map + /jackal1/platform/odom/filtered + /jackal1/tf
+
+RGB image -> YOLO person detection
+Aligned depth -> 3D person position
+Camera/LiDAR association -> tracked position and velocity -> /people
+
+PS4 Options (button 7)
+    -> ps4_nav_trigger_node
+    -> fixed goal 6 m ahead + /social_nav_diffusion/nav_enabled=true
+    -> nav2_goal_to_pose_bridge
+    -> /goal_pose
+
+goal + odom + people + map + live LiDAR
+    -> policy_cmd_vel_node
+    -> SocialNavDiffusion candidate trajectories
+    -> candidate scoring
+    -> acados unicycle projection
+    -> projected-trajectory execution and slew limits
+    -> /debug_cmd_vel
+
+/debug_cmd_vel + e-stop + nav-enabled gate + current LiDAR
+    -> jackal_twist_adapter
+    -> transparent pass or full zero-command veto
+    -> /jackal1/cmd_vel
+    -> Clearpath platform controller
+    -> wheels
+    -> filtered odometry feedback
+```
+
+### Visualization And Experiment Data
+
+| Topic | Meaning |
+|---|---|
+| `/people` | Tracked people used by the policy. |
+| `/people_detector/markers` | Person circles and velocity-horizon markers. |
+| `/social_nav_diffusion/candidate_trajectories` | All sampled diffusion trajectories, test mode only. |
+| `/social_nav_diffusion/predicted_trajectory` | Selected raw diffusion trajectory. |
+| `/social_nav_diffusion/projected_trajectory` | Selected trajectory after acados projection. |
+| `/social_nav_diffusion/active_goal_marker` | Current autonomous target. |
+| `/social_nav_diffusion/policy_debug` | Model inputs, converted command, final command, timing, state, and safety flags. |
+| `/social_nav_diffusion/style_vector` | Active `[prox, pass, yield, group]` test condition. |
+| `/debug_cmd_vel` | Wrapper output before the final hardware adapter. |
+| `/jackal1/cmd_vel` | Command delivered to the Clearpath platform interface. |
+
+One accepted Options start creates a directory under `/workspace/bags` named
+with a timestamp and the active style vector. The narrow MCAP records TF, map,
+filtered odometry, people, detector status and markers, goal, policy and final
+commands, policy debug, candidate/selected/projected trajectories, goal marker,
+navigation gate, and style vector. Raw RGB and depth are intentionally excluded
+to reduce RAM and disk bandwidth.
+
+Detailed planning diagnostics are disabled during normal control. Set
+`SND_DETAILED_TIMING=1` only for measurement because accurate per-stage CUDA
+timing adds synchronization. The verified offline steady-state breakdown on the
+RTX 4070 Laptop GPU was approximately:
+
+```text
+conditioning       1.2 ms
+embedding          6.0 ms
+DDIM             187.8 ms
+scoring            3.0 ms
+candidate total  198.1 ms
+projection         6.9 ms
+backend            0.1 ms
+complete planning 205.1 ms
+```
+
+DDIM was about `91.6%` of the detailed complete-planning measurement. The first
+`torch.compile` call is not representative and must be excluded as warm-up.
