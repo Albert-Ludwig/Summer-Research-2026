@@ -106,17 +106,43 @@ def main():
         occ = None
     policy.set_static_map(occ, 1.0 if occ is not None else 0.0, policy.map_extent)
 
-    print("[single_step] running conditioning -> inference -> acados/projection -> action")
-    action = policy.predict(state)
-    fields = action._asdict() if hasattr(action, "_asdict") else vars(action)
-    print(f"[single_step] raw action: type={type(action).__name__}, fields={fields}")
-    if "v" in fields and "r" in fields:
-        angular_z = float(fields["r"]) / float(policy.time_step)
-        print(f"[single_step] final control: linear.x={float(fields['v']):.6f}, angular.z={angular_z:.6f}")
-    elif "vx" in fields and "vy" in fields:
-        print(f"[single_step] final control ActionXY: vx={float(fields['vx']):.6f}, vy={float(fields['vy']):.6f}")
-    else:
-        print("[single_step] final control: unknown action format")
+    repeat_count = max(1, int(os.environ.get("SND_SINGLE_STEP_REPEATS", "1")))
+    timing_rows = []
+    print(
+        "[single_step] running conditioning -> inference -> "
+        f"acados/projection -> action ({repeat_count} call(s))"
+    )
+    for call_index in range(repeat_count):
+        print(f"[single_step] call {call_index + 1}/{repeat_count}")
+        action = policy.predict(state)
+        fields = action._asdict() if hasattr(action, "_asdict") else vars(action)
+        print(f"[single_step] raw action: type={type(action).__name__}, fields={fields}")
+        if "v" in fields and "r" in fields:
+            angular_z = float(fields["r"]) / float(policy.time_step)
+            print(f"[single_step] final control: linear.x={float(fields['v']):.6f}, angular.z={angular_z:.6f}")
+        elif "vx" in fields and "vy" in fields:
+            print(f"[single_step] final control ActionXY: vx={float(fields['vx']):.6f}, vy={float(fields['vy']):.6f}")
+        else:
+            print("[single_step] final control: unknown action format")
+        if isinstance(policy.last_predict_timing, dict):
+            timing_rows.append(dict(policy.last_predict_timing))
+
+    if len(timing_rows) > 1:
+        steady_rows = timing_rows[1:]
+        print(f"[single_step] steady-state averages ({len(steady_rows)} calls; warmup excluded)")
+        for key in (
+            "conditioning_ms",
+            "embedding_ms",
+            "ddim_ms",
+            "scoring_ms",
+            "diffusion_ms",
+            "projection_ms",
+            "backend_ms",
+            "total_ms",
+        ):
+            values = [float(row[key]) for row in steady_rows if key in row]
+            if values:
+                print(f"  {key}: {sum(values) / len(values):.1f} ms")
     print("[single_step] done")
 
 

@@ -504,6 +504,15 @@ class DiffusionConditionalUNet1DCFG(Policy):
         # it is measured and subtracted from timing_total rather than
         # silently inflating the latency claim.
         self._viz_s = 0.0
+
+        # Optional stage-level diagnostics. Keep this disabled during normal
+        # control: the CUDA synchronizations needed for accurate stage timing
+        # deliberately serialize GPU work. Enable only for measurement with
+        # SND_DETAILED_TIMING=1.
+        self.detailed_timing = os.environ.get(
+            "SND_DETAILED_TIMING", ""
+        ).strip().lower() in {"1", "true", "yes", "on"}
+        self._detailed_timing_current = {}
         # ─────────────────────────────────────────────────────────────────
 
         # ── PROJECTION ──────────────────────────────────────────────────
@@ -1014,7 +1023,64 @@ class DiffusionConditionalUNet1DCFG(Policy):
         monotonic time base.
         """
         self._viz_s = 0.0
+        self._detailed_timing_current = {}
         return time.perf_counter()
+
+    def _detailed_timing_start(self):
+        """Open an accurately synchronized stage clock when diagnostics run."""
+        if not self.detailed_timing:
+            return None
+        if self.device is not None and self.device.type == "cuda":
+            torch.cuda.synchronize()
+        return time.perf_counter()
+
+    def _detailed_timing_mark(self, name, started_at):
+        """Close one diagnostic stage and return its synchronized boundary."""
+        if started_at is None:
+            return None
+        if self.device is not None and self.device.type == "cuda":
+            torch.cuda.synchronize()
+        ended_at = time.perf_counter()
+        self._detailed_timing_current[name] = (ended_at - started_at) * 1e3
+        return ended_at
+
+    def _complete_detailed_timing(self, projection_ms, total_ms):
+        """Finalize and print one non-overlapping planning-time breakdown."""
+        if not self.detailed_timing:
+            return {}
+
+        detail = dict(self._detailed_timing_current)
+        candidate_ms = (self.timing[-1] * 1e3) if self.timing else float("nan")
+        staged_candidate_ms = sum(
+            detail.get(key, 0.0)
+            for key in (
+                "conditioning_ms",
+                "embedding_ms",
+                "ddim_ms",
+                "scoring_ms",
+            )
+        )
+        detail.update({
+            "candidate_ms": candidate_ms,
+            "candidate_unattributed_ms": max(0.0, candidate_ms - staged_candidate_ms),
+            "projection_ms": projection_ms,
+            "backend_ms": max(0.0, total_ms - candidate_ms - projection_ms),
+            "total_ms": total_ms,
+        })
+        self._detailed_timing_current = detail
+
+        print(
+            "  [timing-detail] "
+            f"conditioning={detail.get('conditioning_ms', float('nan')):.1f} ms  "
+            f"embedding={detail.get('embedding_ms', float('nan')):.1f} ms  "
+            f"ddim={detail.get('ddim_ms', float('nan')):.1f} ms  "
+            f"scoring={detail.get('scoring_ms', float('nan')):.1f} ms  "
+            f"candidate_unattributed={detail['candidate_unattributed_ms']:.1f} ms  "
+            f"projection={projection_ms:.1f} ms  "
+            f"backend={detail['backend_ms']:.1f} ms  "
+            f"total={total_ms:.1f} ms"
+        )
+        return detail
 
     def _log_predict_total(self, t_predict_start, tag=""):
         """Close the end-to-end window, record it, and print it.
@@ -1030,6 +1096,8 @@ class DiffusionConditionalUNet1DCFG(Policy):
         self.timing_total.append(deploy_ms * 1e-3)
         print(f"  [predict] {tag}total: {deploy_ms:.1f} ms "
               f"(wall {wall_ms:.1f} ms − viz {viz_ms:.1f} ms)")
+
+        return deploy_ms
 
     def _viz_done(self, t0):
         """Charge [t0, now) to visualizer-only overhead.
@@ -1728,6 +1796,7 @@ class DiffusionConditionalUNet1DCFG(Policy):
         # conditioning + denoising + scoring/selection, i.e. all planning work
         # that is NOT the shared projection back-end.
         _t_cand0 = time.perf_counter()
+        _t_detail = self._detailed_timing_start()
 
         start, goal, obstacles, obs_mask = self.build_condition_from_state(state)
 
@@ -1743,6 +1812,7 @@ class DiffusionConditionalUNet1DCFG(Policy):
         K = self.num_samples
 
         x = torch.randn(K, self.traj_dim, self.horizon, device=self.device)
+        _t_detail = self._detailed_timing_mark("conditioning_ms", _t_detail)
 
         with torch.no_grad():
             # ── Compositional CFG — variant layout matches the TRAINER exactly ──
@@ -1848,7 +1918,10 @@ class DiffusionConditionalUNet1DCFG(Policy):
             # instead of every one of the 5 denoising steps.
             attn_mask_6k_bool = attn_mask_6k.bool()
 
+        _t_detail = self._detailed_timing_mark("embedding_ms", _t_detail)
         denoise_mode = "DDIM" if self.ddim_inference else "DDPM"
+        if self.detailed_timing and self.device is not None and self.device.type == "cuda":
+            torch.cuda.synchronize()
         time1 = time.perf_counter()
 
         traj_std  = self.norm_t["traj_std"]
@@ -1978,6 +2051,9 @@ class DiffusionConditionalUNet1DCFG(Policy):
             if self.device is not None and self.device.type == "cuda":
                 torch.cuda.synchronize()
             time2 = time.perf_counter()
+            if self.detailed_timing:
+                self._detailed_timing_current["ddim_ms"] = (time2 - time1) * 1e3
+                _t_detail = time2
             # Denoising loop ONLY: conditioning/tokenization happened before
             # time1 and scoring/selection happens after, so this is a
             # sub-interval of self.timing, not the planning cost.
@@ -2039,7 +2115,12 @@ class DiffusionConditionalUNet1DCFG(Policy):
         # would be timing async kernel LAUNCHES, not GPU execution.
         if self.device is not None and self.device.type == "cuda":
             torch.cuda.synchronize()
-        self.timing.append(time.perf_counter() - _t_cand0)
+        _t_cand1 = time.perf_counter()
+        self.timing.append(_t_cand1 - _t_cand0)
+        if _t_detail is not None:
+            self._detailed_timing_current["scoring_ms"] = (
+                _t_cand1 - _t_detail
+            ) * 1e3
 
         # Build all K diffusion candidates in world frame for the visualizer
         # (index 0 = the selected sample). This is the ONLY policy-specific
@@ -2206,7 +2287,8 @@ class DiffusionConditionalUNet1DCFG(Policy):
                 }
                 self._viz_done(_t_viz0)
 
-                self._log_predict_total(t_predict_start, tag="BRAKE ")
+                total_ms = self._log_predict_total(t_predict_start, tag="BRAKE ")
+                detail = self._complete_detailed_timing(proj_layer_ms, total_ms)
 
                 # Surfaced to ROS-side rolling-average logging
                 # (policy_cmd_vel_node.planning_timing_averages()). Kept as an
@@ -2216,8 +2298,9 @@ class DiffusionConditionalUNet1DCFG(Policy):
                 self.last_predict_timing = {
                     'diffusion_ms' : (self.timing[-1] * 1e3) if self.timing else float('nan'),
                     'projection_ms': proj_layer_ms,
-                    'total_ms'     : (time.perf_counter() - t_predict_start) * 1e3,
+                    'total_ms'     : total_ms,
                 }
+                self.last_predict_timing.update(detail)
 
                 return self._emergency_brake_action()
         else:
@@ -2362,7 +2445,11 @@ class DiffusionConditionalUNet1DCFG(Policy):
         # Stop the end-to-end clock HERE — after enforce_lims, with the action
         # fully determined — so the reported number really is "conditions in →
         # control action out".
-        self._log_predict_total(t_predict_start)
+        total_ms = self._log_predict_total(t_predict_start)
+        detail = self._complete_detailed_timing(
+            proj_layer_ms if used_proj else 0.0,
+            total_ms,
+        )
 
         # Surfaced to ROS-side rolling-average logging
         # (policy_cmd_vel_node.planning_timing_averages()). Kept as an
@@ -2372,8 +2459,9 @@ class DiffusionConditionalUNet1DCFG(Policy):
         self.last_predict_timing = {
             'diffusion_ms' : (self.timing[-1] * 1e3) if self.timing else float('nan'),
             'projection_ms': (proj_layer_ms if used_proj else 0.0),
-            'total_ms'     : (self.timing_total[-1] * 1e3) if self.timing_total else float('nan'),
+            'total_ms'     : total_ms,
         }
+        self.last_predict_timing.update(detail)
 
         if self.kinematics == "holonomic":
             return ActionXY(*action_world_xy)

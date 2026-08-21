@@ -2356,12 +2356,27 @@ class PolicyCmdVelNode(Node):
                 "planning_timing_samples": 0,
             }
         count = len(window)
-        return {
+        averages = {
             "diffusion_ms_avg": sum(float(t.get("diffusion_ms", 0.0)) for t in window) / count,
             "projection_ms_avg": sum(float(t.get("projection_ms", 0.0)) for t in window) / count,
             "planning_ms_avg": sum(float(t.get("total_ms", 0.0)) for t in window) / count,
             "planning_timing_samples": count,
         }
+        for key in (
+            "conditioning_ms",
+            "embedding_ms",
+            "ddim_ms",
+            "scoring_ms",
+            "candidate_unattributed_ms",
+            "backend_ms",
+        ):
+            samples = [
+                float(t[key]) for t in window
+                if key in t and math.isfinite(float(t[key]))
+            ]
+            if samples:
+                averages[f"{key}_avg"] = sum(samples) / len(samples)
+        return averages
 
     def policy_debug_callback(self):
         now = self.now_sec()
