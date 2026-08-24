@@ -817,9 +817,9 @@ The retained MCAP run is:
 
 [`bags/run_20260820_205934_550984_prox0.00_pass0.00_yield0.00_group0.00`](bags/run_20260820_205934_550984_prox0.00_pass0.00_yield0.00_group0.00)
 
-The corresponding RViz playback video is:
+The corresponding RViz playback video is shown below:
 
-[`social_nav_rviz_playback_run_20260820_205934.mp4`](bags/recordings/social_nav_rviz_playback_run_20260820_205934.mp4)
+https://github.com/user-attachments/assets/fcc90aa7-beed-4d99-b896-a07c73ec3df7
 
 The video is a real-run rosbag playback reference. It verifies that the bag can
 be replayed and that the goal, candidate trajectories, selected trajectory,
