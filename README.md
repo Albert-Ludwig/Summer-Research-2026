@@ -51,9 +51,8 @@ acados libraries, or compiled ROS binaries between Jazzy and Humble.
 The tracked source and this guide can rebuild the laptop-side Humble
 environment. The following items are external and must be preserved separately:
 
-1. Model weights ignored by Git.
-2. The teammate-managed `nahl_ws` and maps on the physical Jackal.
-3. The local committed Jazzy image, unless Jazzy is rebuilt from source.
+1. The teammate-managed `nahl_ws` and maps on the physical Jackal.
+2. The local committed Jazzy image, unless Jazzy is rebuilt from source.
 
 The Jazzy image contains a 16.7 GB committed layer and has no Dockerfile in
 this repository. Byte-for-byte recovery requires a `docker save` archive.
@@ -79,6 +78,8 @@ git clone https://github.com/Albert-Ludwig/Summer-Research-2026.git `
   "C:\Users\Administrator\Documents\Summer Research 2026"
 cd "C:\Users\Administrator\Documents\Summer Research 2026"
 git checkout <stable-commit-or-tag>
+git lfs install
+git lfs pull
 git status --short
 ```
 
@@ -109,14 +110,15 @@ listed in this README.
 
 ### Required Model Assets
 
-`*.pt` is intentionally ignored by Git. Restore these assets before creating
-either Python environment:
+The validated model assets are stored in Git LFS. Install Git LFS and run
+`git lfs pull` after cloning and before creating either Python environment:
 
-| Asset                | Path under `SocialNavDiffusion_Inference` |              Size | SHA256                                                             |
-| -------------------- | ----------------------------------------- | ----------------: | ------------------------------------------------------------------ |
-| Diffusion checkpoint | `SocialGuidedNavPlanner.pt`               | 358,855,529 bytes | `e60371f69ea096a0a7ebed512f0dcbbc6d03a7c9c1b72e65261aff0417e5c1e6` |
-| Normalization data   | `norm_stats_SOCIAL_NORMS8.npy`            |         725 bytes | `0eac9b2e7080db7dde83c85577cbe6f105aab9fa54804ac6935f07702b2ed935` |
-| YOLO detector        | `yolo11n.pt`                              |   5,613,764 bytes | `0ebbc80d4a7680d14987a577cd21342b65ecfd94632bd9a8da63ae6417644ee1` |
+| Asset                 | Path under `SocialNavDiffusion_Inference`             |              Size | SHA256                                                             |
+| --------------------- | ----------------------------------------------------- | ----------------: | ------------------------------------------------------------------ |
+| Stable checkpoint     | `SocialGuidedNavPlanner.pt`                           | 358,855,529 bytes | `e60371f69ea096a0a7ebed512f0dcbbc6d03a7c9c1b72e65261aff0417e5c1e6` |
+| Test-mode checkpoint  | `ckpt_step990000_sogudiff_singleaxis_1p5M.pt`         | 359,113,646 bytes | `0b03fdacbc5762f611d3522a5ba999d7dca0c3f1232902b1114f8fc11e125687` |
+| Normalization data    | `norm_stats_SOCIAL_NORMS8.npy`                        |         725 bytes | `0eac9b2e7080db7dde83c85577cbe6f105aab9fa54804ac6935f07702b2ed935` |
+| YOLO detector         | `yolo11n.pt`                                          |   5,613,764 bytes | `0ebbc80d4a7680d14987a577cd21342b65ecfd94632bd9a8da63ae6417644ee1` |
 
 The runtime checkpoint name is a relative symbolic link:
 
@@ -131,14 +133,14 @@ Verify the restored assets inside Linux:
 cd /workspace/SocialNavDiffusion_Inference
 sha256sum \
   SocialGuidedNavPlanner.pt \
+  ckpt_step990000_sogudiff_singleaxis_1p5M.pt \
   norm_stats_SOCIAL_NORMS8.npy \
   yolo11n.pt
 test "$(readlink ckpt_step478000_SOCIAL_NORMS8.pt)" = \
   "SocialGuidedNavPlanner.pt"
 ```
 
-Use Git LFS, a private GitHub Release, or controlled external storage for the
-two `.pt` files. Never use an empty checkpoint placeholder.
+Do not replace an LFS object with an empty checkpoint placeholder.
 
 Never commit API keys, passwords, SSH private keys, WSL VHDX files, or Docker
 volumes. The real launcher prompts for the Jackal password. If

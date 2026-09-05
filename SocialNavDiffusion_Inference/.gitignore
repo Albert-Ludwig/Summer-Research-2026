@@ -16,6 +16,9 @@ data/
 *.mp4
 videos/
 *.pt
+!SocialGuidedNavPlanner.pt
+!ckpt_step990000_sogudiff_singleaxis_1p5M.pt
+!yolo11n.pt
 
 # local/generated acados outputs from smoke tests
 /acados_proj_ocp.json
