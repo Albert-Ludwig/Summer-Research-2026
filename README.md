@@ -21,6 +21,7 @@ original inference repository is:
 ```text
 https://github.com/schaiblc/SocialNavDiffusion_Inference.git
 ```
+[SocialNavDiffusion_Inference](https://github.com/schaiblc/SocialNavDiffusion_Inference.git)
 
 ## Environment And Rebuild Reference
 
